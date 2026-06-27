@@ -1,0 +1,14 @@
+# AgentSandbox Policy: Research
+#
+# This policy allows all actions. Suitable for trusted research agents
+# operating in controlled environments.
+
+name: research
+version: "1"
+description: >
+  A fully permissive policy that allows all actions. Use only in
+  trusted environments with trusted agents.
+
+default_effect: allow
+
+rules: []

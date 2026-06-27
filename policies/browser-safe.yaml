@@ -1,0 +1,25 @@
+# AgentSandbox Policy: Browser Safe
+#
+# This policy allows file reading and network access
+# while denying shell execution. Suitable for browser-based agents.
+
+name: browser-safe
+version: "1"
+description: >
+  A policy for browser agents that allows file reading and network
+  access but blocks shell command execution.
+
+default_effect: deny
+
+rules:
+  - action: file_read
+    effect: allow
+    description: "Allow reading any file"
+
+  - action: network
+    effect: allow
+    description: "Allow network requests"
+
+  - action: shell
+    effect: deny
+    description: "Block shell command execution"

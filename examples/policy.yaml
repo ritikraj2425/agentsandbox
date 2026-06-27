@@ -1,0 +1,29 @@
+# AgentSandbox Example Policy: Coding Safe
+#
+# This policy allows common coding actions (file read/write, shell commands)
+# while denying network access. Suitable for local coding agents.
+
+name: coding-safe
+version: "1"
+description: >
+  A permissive policy for coding agents that allows filesystem operations
+  and shell commands but blocks network requests.
+
+default_effect: deny
+
+rules:
+  - action: file_read
+    effect: allow
+    description: "Allow reading any file"
+
+  - action: file_write
+    effect: allow
+    description: "Allow writing files"
+
+  - action: shell
+    effect: allow
+    description: "Allow shell command execution"
+
+  - action: network
+    effect: deny
+    description: "Block all network requests"
