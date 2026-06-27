@@ -86,6 +86,10 @@ type Observation struct {
 	// FilesDeleted lists paths of files that were deleted.
 	FilesDeleted []string `json:"files_deleted,omitempty"`
 
+	// Backend identifies which runtime backend produced this observation
+	// (e.g., "local", "docker", "gvisor"). Enables multi-backend auditing.
+	Backend string `json:"backend,omitempty"`
+
 	// CreatedAt is when this observation was generated.
 	CreatedAt time.Time `json:"created_at"`
 }

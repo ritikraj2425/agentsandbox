@@ -23,7 +23,7 @@
 # the directory name (e.g., `agentsandbox` from cmd/agentsandbox/).
 # Binaries are platform-specific (macOS binary won't run on Linux),
 # so they should never be committed.
-agentsandbox
+/agentsandbox
 *.exe
 
 # Go test generates temporary binaries and coverage files.
