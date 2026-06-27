@@ -190,41 +190,21 @@ type RunLogger struct {
 
 // NewRunLogger creates a new run directory and initializes the trace log.
 //
-// baseDir is the project root where .agentsandbox/ will be created.
-// For example, if baseDir is "/Users/ritikraj/project", the run directory
-// will be at "/Users/ritikraj/project/.agentsandbox/runs/run_<id>/".
+// NewRunLogger initializes a new TraceLogger for the specified execution context.
 //
-// This function:
-//  1. Generates a unique run ID with timestamp and random suffix.
-//  2. Creates the full directory path (including parent directories).
-//  3. Opens trace.jsonl for writing.
-//  4. Logs the first event: "run.created".
+// The logger creates a unique, chronological run directory under `<baseDir>/.agentsandbox/runs/`
+// to persist the action's lifecycle events, file diffs, and output streams.
 //
-// The caller MUST call Close() when done to flush and close the trace file.
+// It emits the initial "run.created" event. The caller is responsible for invoking Close()
+// to flush resources.
 func NewRunLogger(baseDir string) (*RunLogger, error) {
-	// Generate a unique run ID.
-	// Format: run_<YYYYMMDD>_<HHmmss>_<random>
-	//
-	// Why include the timestamp in the ID?
-	// When you list .agentsandbox/runs/ with `ls`, the runs appear in
-	// chronological order because the timestamp is the sort key.
-	// The random suffix prevents collisions if two runs start in the same second.
 	now := time.Now()
 	randomBytes := make([]byte, 4)
 	_, _ = rand.Read(randomBytes)
 	runID := fmt.Sprintf("run_%s_%x", now.Format("20060102_150405"), randomBytes)
 
-	// Build the full path: <baseDir>/.agentsandbox/runs/<runID>/
-	//
-	// Why .agentsandbox (dot prefix)?
-	// Dot-prefixed directories are hidden by default on Unix systems.
-	// This keeps the project directory clean — users don't see run logs
-	// unless they explicitly look for them with `ls -a`.
 	runDir := filepath.Join(baseDir, ".agentsandbox", "runs", runID)
 
-	// os.MkdirAll creates the directory and all parent directories.
-	// The 0755 permission means: owner can read/write/execute,
-	// group and others can read/execute (standard for directories).
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create run directory %s: %w", runDir, err)
 	}
@@ -312,15 +292,10 @@ func (l *RunLogger) WriteStderr(content string) {
 	_ = os.WriteFile(path, []byte(content), 0644)
 }
 
-// WriteReport writes the full Observation as pretty-printed JSON to report.json.
+// WriteReport persists the detailed Observation summary to report.json.
 //
-// Why pretty-printed (indented)?
-// report.json is meant for humans to read. When a developer runs
-// `cat .agentsandbox/runs/run_xyz/report.json`, they want to see
-// nicely formatted JSON, not a single compressed line.
-//
-// The value parameter is interface{} so we can write any struct
-// (Observation today, extended reports in future phases).
+// Serializing the final observation provides an easily auditable artifact
+// documenting the action's execution context, exit status, and truncated outputs.
 func (l *RunLogger) WriteReport(value interface{}) {
 	if l == nil {
 		return
@@ -337,6 +312,25 @@ func (l *RunLogger) WriteReport(value interface{}) {
 	// Append a newline at the end for clean cat/less output.
 	data = append(data, '\n')
 
+	_ = os.WriteFile(path, data, 0644)
+}
+
+// WriteDiff writes the filesystem diff report to file-diff.json.
+//
+// Providing a detailed diff report allows developers to audit exactly
+// which files an agent action mutated during execution.
+func (l *RunLogger) WriteDiff(value interface{}) {
+	if l == nil {
+		return
+	}
+	path := filepath.Join(l.RunDir, "file-diff.json")
+
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return
+	}
+
+	data = append(data, '\n')
 	_ = os.WriteFile(path, data, 0644)
 }
 

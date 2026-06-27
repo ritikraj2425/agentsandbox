@@ -1,21 +1,16 @@
 // Package runner provides runtime backends for executing agent actions.
 //
 // The local runner executes actions directly on the host machine using
-// os/exec. It is the simplest backend and provides no isolation — the
-// command has full access to the host filesystem, network, and environment.
+// os/exec. It provides a lightweight execution layer without sandboxing,
+// meaning commands have full access to the host filesystem, network,
+// and environment.
 //
-// Why this package exists:
-// The runner is the "execution runtime" from the manifesto's core loop:
+// The Runner interface standardizes action execution across different
+// backends (e.g., local, Docker, gVisor), allowing the core sandbox
+// loop to remain backend-agnostic.
 //
-//	Agent proposes Action → Policy checks → Runner executes → Observation returned
-//
-// This package handles step 3: actually running the command and capturing
-// everything that happened (stdout, stderr, exit code, duration).
-//
-// Phase 2 update:
-// RunCommand now accepts an optional *trace.RunLogger. When provided,
-// the runner logs process.started and process.finished events, and writes
-// stdout/stderr to the logger's log files on disk.
+// When instantiated with a RunLogger, the runner automatically emits
+// lifecycle events and persists output streams for auditing and replay.
 package runner
 
 import (
@@ -32,28 +27,22 @@ import (
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
 )
 
-// Runner is the interface all runtime backends must implement.
+// Runner defines the standard execution interface for all backends.
 //
-// Why an interface?
-// We will have multiple backends: local, Docker, gVisor, Firecracker.
-// All of them accept the same Action and return the same Observation.
-// The CLI and API gateway don't need to know which backend is running —
-// they just call Run() and get back a standard result.
+// Implementing backends (local, Docker, gVisor) must accept a standardized
+// Action and return a consistent Observation, decoupling the execution
+// environment from the policy and API layers.
 type Runner interface {
 	// Run executes the given action and returns a trace of events.
 	Run(action *actions.Action, pol *policy.Policy) ([]trace.TraceEvent, error)
 }
 
-// DefaultTimeout is how long a command is allowed to run before being killed.
+// DefaultTimeout specifies the maximum duration a command can execute
+// before being forcefully terminated.
 //
-// 60 seconds is generous for most agent actions (running tests, linting,
-// reading files). If an agent needs longer, the timeout should be
-// configurable via CLI flags (added in a future phase).
-//
-// Why use timeouts at all?
-// AI agents can accidentally run infinite loops, blocking builds, or
-// commands that hang forever waiting for input. The timeout prevents
-// a single action from consuming resources indefinitely.
+// Setting a strict upper bound prevents runaway processes, infinite loops,
+// or hanging network requests initiated by the agent from exhausting
+// system resources indefinitely.
 const DefaultTimeout = 60 * time.Second
 
 // LocalRunner executes actions directly on the host OS.
@@ -136,33 +125,13 @@ func (r *LocalRunner) Run(action *actions.Action, pol *policy.Policy) ([]trace.T
 	return events, nil
 }
 
-// RunCommand is the real execution engine for shell commands.
+// RunCommand executes a shell command and returns the resulting Observation.
 //
-// It takes a protocol.Action (the standard format) and returns a
-// protocol.Observation (the standard result).
+// If a logger is provided, it emits lifecycle events and persists output streams.
 //
-// Phase 2 change: the logger parameter is optional. When non-nil,
-// RunCommand will:
-//   - Log "process.started" before executing the command.
-//   - Log "process.finished" after the command exits.
-//   - Write full stdout to stdout.log via the logger.
-//   - Write full stderr to stderr.log via the logger.
-//
-// When logger is nil, behavior is identical to Phase 1 (no disk logging).
-//
-// How it works:
-//  1. Build the OS command using /bin/sh -c (Unix) or cmd /C (Windows).
-//  2. Set the working directory.
-//  3. Attach timeout via context.WithTimeout.
-//  4. Capture stdout and stderr into byte buffers.
-//  5. Run the command and wait for it to finish (or timeout).
-//  6. Package everything into an Observation.
-//
-// Why /bin/sh -c instead of running the binary directly?
-// Agent commands are full shell expressions like "go test ./..." or
-// "cat file.txt | grep error". The shell interprets pipes, globs,
-// and redirections. Without sh -c, we'd need to parse shell syntax
-// ourselves, which is complex and error-prone.
+// Commands are executed via the host's native shell interpreter (`/bin/sh -c` on Unix,
+// `cmd /C` on Windows) to naturally support pipes, globs, and environment variables
+// without requiring complex manual parsing.
 func (r *LocalRunner) RunCommand(ctx context.Context, action protocol.Action, logger *trace.RunLogger) protocol.Observation {
 	obs := protocol.NewObservation(action.ID)
 	obs.Command = action.Command()

@@ -80,6 +80,12 @@ type Observation struct {
 	// what happened without looking up the original Action.
 	Command string `json:"command,omitempty"`
 
+	// FilesChanged lists paths of files that were created or modified.
+	FilesChanged []string `json:"files_changed,omitempty"`
+
+	// FilesDeleted lists paths of files that were deleted.
+	FilesDeleted []string `json:"files_deleted,omitempty"`
+
 	// CreatedAt is when this observation was generated.
 	CreatedAt time.Time `json:"created_at"`
 }
