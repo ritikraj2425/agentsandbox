@@ -65,9 +65,16 @@ const (
 	EventTypeActionStart EventType = "action_start"
 	// EventTypeActionEnd marks the end of action execution (legacy).
 	EventTypeActionEnd EventType = "action_end"
-	// EventTypePolicyCheck records a policy evaluation result (legacy).
-	EventTypePolicyCheck EventType = "policy_check"
-	// EventTypeOutput captures action output (legacy).
+	// EventTypePolicyCheck records the evaluation of a command against a policy.
+	EventTypePolicyCheck EventType = "policy.check"
+
+	// EventTypeApprovalRequested records when the engine paused to ask a human.
+	EventTypeApprovalRequested EventType = "approval.requested"
+
+	// EventTypeApprovalDecision records the human's response to an approval request.
+	EventTypeApprovalDecision EventType = "approval.decision"
+
+	// EventTypeProcessStarted records the exact moment the OS process launched.
 	EventTypeOutput EventType = "output"
 	// EventTypeError records an error during execution (legacy).
 	EventTypeError EventType = "error"

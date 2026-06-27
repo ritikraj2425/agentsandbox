@@ -137,14 +137,14 @@ func (p *CommandPolicy) CheckCommand(command string) Decision {
 		}
 	}
 
-	// Step 2: Check require_approval list (treated as deny for now).
+	// Step 2: Check require_approval list.
 	for _, prefix := range p.RequireApproval {
 		if matchesPrefix(cmd, prefix) {
 			return Decision{
 				Allowed:     false,
 				Effect:      "require_approval",
 				MatchedRule: prefix,
-				Reason:      fmt.Sprintf("requires approval (not yet implemented): %q", prefix),
+				Reason:      fmt.Sprintf("requires approval: %q", prefix),
 			}
 		}
 	}
