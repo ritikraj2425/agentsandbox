@@ -1,29 +1,69 @@
-# AgentSandbox Example Policy: Coding Safe
+# ─────────────────────────────────────────────────────────────────────────────
+# AgentSandbox Policy: Coding Safe
+# ─────────────────────────────────────────────────────────────────────────────
 #
-# This policy allows common coding actions (file read/write, shell commands)
-# while denying network access. Suitable for local coding agents.
+# This policy defines which shell commands an AI agent is permitted to run
+# when working on a coding task. It follows the allowlist model:
+#
+#   - Commands in the "allow" list are executed immediately.
+#   - Commands in the "deny" list are always blocked (deny beats allow).
+#   - Commands in "require_approval" need human confirmation (Phase 5).
+#   - Everything else is blocked by default.
+#
+# Usage:
+#   agentsandbox run --policy examples/policy.yaml "go test ./..."
+#
+# Matching rules:
+#   - Prefix matching: "go test" allows "go test ./...", "go test -v", etc.
+#   - Word boundaries: "echo" allows "echo hello" but NOT "echoserver".
+#   - Deny > Allow: if a command matches both lists, deny always wins.
+# ─────────────────────────────────────────────────────────────────────────────
 
 name: coding-safe
-version: "1"
-description: >
-  A permissive policy for coding agents that allows filesystem operations
-  and shell commands but blocks network requests.
+description: Secure defaults for AI coding agents — allows build and test tools, blocks destructive operations.
 
-default_effect: deny
+commands:
+  allow:
+    - go test
+    - go build
+    - go run
+    - go vet
+    - go fmt
+    - gofmt
+    - echo
+    - cat
+    - ls
+    - pwd
+    - head
+    - tail
+    - grep
+    - find
+    - wc
+    - diff
+    - mkdir
+    - touch
 
-rules:
-  - action: file_read
-    effect: allow
-    description: "Allow reading any file"
+  deny:
+    - rm -rf
+    - sudo
+    - chmod 777
+    - curl
+    - wget
+    - ssh
+    - scp
+    - nc
+    - dd
+    - mkfs
+    - mount
+    - kill -9
+    - shutdown
+    - reboot
 
-  - action: file_write
-    effect: allow
-    description: "Allow writing files"
-
-  - action: shell
-    effect: allow
-    description: "Allow shell command execution"
-
-  - action: network
-    effect: deny
-    description: "Block all network requests"
+  require_approval:
+    - npm install
+    - pip install
+    - go install
+    - brew install
+    - apt install
+    - git push
+    - git push --force
