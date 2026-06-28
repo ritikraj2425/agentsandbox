@@ -27,10 +27,12 @@ import (
 	// Import backend packages so their init() functions register with the
 	// runtime registry. Adding a new backend is as simple as adding an
 	// import line here — the CLI does not need any other changes.
+	dockerrt "github.com/ritikraj2425/agentsandbox/runtimes/docker"
+	gvisorrt "github.com/ritikraj2425/agentsandbox/runtimes/gvisor"
 	localrt "github.com/ritikraj2425/agentsandbox/runtimes/local"
 )
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "--help" || os.Args[1] == "-h" {
@@ -95,6 +97,9 @@ func cmdRun(args []string) {
 	command := ""
 	policyPath := ""
 	backendName := "local"
+	dockerImage := ""
+	cpus := ""
+	memory := ""
 	showJSON := false
 	autoApprove := false
 	nonInteractive := false
@@ -112,7 +117,10 @@ func cmdRun(args []string) {
   command   The shell command to execute (required, must be quoted)
 
 %s
-  --backend <name>  Select execution backend (default: local)
+  --backend <name>  Select execution backend: local, docker, gvisor (default: local)
+  --image <image>   Docker/gVisor image to use
+  --cpus <limit>    CPU limit for docker/gvisor (e.g. 1.5)
+  --memory <limit>  Memory limit for docker/gvisor (e.g. 2gb)
   --policy <file>   Load a YAML policy file to enforce command rules
   --json            Output the full Observation as JSON
   --yes             Automatically approve commands that require approval
@@ -122,8 +130,9 @@ func cmdRun(args []string) {
 %s
   agentsandbox run "echo hello"
   agentsandbox run --backend local "echo hello"
+  agentsandbox run --backend docker --image golang:1.26 "go test ./..."
+  agentsandbox run --backend gvisor --cpus 1.5 --memory 2gb "go test ./..."
   agentsandbox run --policy examples/policy.yaml "go test ./..."
-  agentsandbox run --policy examples/policy.yaml "rm -rf test"
   agentsandbox run --json "ls -la"
 `,
 				color.Bold("Run a shell command inside the sandbox"),
@@ -151,6 +160,31 @@ func cmdRun(args []string) {
 			}
 			i++
 			backendName = args[i]
+
+		case "--image":
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "%s --image requires a Docker image name\n", color.Red("✗"))
+				fmt.Fprintf(os.Stderr, "%s agentsandbox run --backend docker --image golang:1.26 \"command\"\n", color.Dim("Usage:"))
+				os.Exit(1)
+			}
+			i++
+			dockerImage = args[i]
+
+		case "--cpus":
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "%s --cpus requires a value\n", color.Red("✗"))
+				os.Exit(1)
+			}
+			i++
+			cpus = args[i]
+
+		case "--memory":
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "%s --memory requires a value\n", color.Red("✗"))
+				os.Exit(1)
+			}
+			i++
+			memory = args[i]
 
 		case "--policy":
 			if i+1 >= len(args) {
@@ -214,12 +248,28 @@ func cmdRun(args []string) {
 	switch backendName {
 	case "local":
 		rt = localrt.New(workDir, logger)
+	case "docker":
+		var rtErr error
+		rt, rtErr = dockerrt.New(workDir, dockerImage, logger)
+		if rtErr != nil {
+			fmt.Fprintf(os.Stderr, "%s Docker backend unavailable: %s\n", color.Red("✗"), rtErr)
+			fmt.Fprintf(os.Stderr, "%s Make sure Docker Desktop is running\n", color.Dim("Hint:"))
+			os.Exit(1)
+		}
+	case "gvisor":
+		var rtErr error
+		rt, rtErr = gvisorrt.New(workDir, dockerImage, cpus, memory, logger)
+		if rtErr != nil {
+			fmt.Fprintf(os.Stderr, "%s gVisor backend unavailable: %s\n", color.Red("✗"), rtErr)
+			fmt.Fprintf(os.Stderr, "%s Make sure runsc is configured in Docker\n", color.Dim("Hint:"))
+			os.Exit(1)
+		}
 	default:
 		// Check the registry for dynamically registered backends.
 		factory, exists := runtime.Registry[backendName]
 		if !exists {
 			fmt.Fprintf(os.Stderr, "%s Unknown backend: %q\n", color.Red("✗"), backendName)
-			fmt.Fprintf(os.Stderr, "%s Available backends: local\n", color.Dim("Hint:"))
+			fmt.Fprintf(os.Stderr, "%s Available backends: local, docker\n", color.Dim("Hint:"))
 			os.Exit(1)
 		}
 		var rtErr error
