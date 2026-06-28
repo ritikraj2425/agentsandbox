@@ -28,11 +28,12 @@ import (
 	// runtime registry. Adding a new backend is as simple as adding an
 	// import line here — the CLI does not need any other changes.
 	dockerrt "github.com/ritikraj2425/agentsandbox/runtimes/docker"
+	firecrackerrt "github.com/ritikraj2425/agentsandbox/runtimes/firecracker"
 	gvisorrt "github.com/ritikraj2425/agentsandbox/runtimes/gvisor"
 	localrt "github.com/ritikraj2425/agentsandbox/runtimes/local"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "--help" || os.Args[1] == "-h" {
@@ -100,6 +101,8 @@ func cmdRun(args []string) {
 	dockerImage := ""
 	cpus := ""
 	memory := ""
+	kernelPath := ""
+	rootfsPath := ""
 	showJSON := false
 	autoApprove := false
 	nonInteractive := false
@@ -117,10 +120,12 @@ func cmdRun(args []string) {
   command   The shell command to execute (required, must be quoted)
 
 %s
-  --backend <name>  Select execution backend: local, docker, gvisor (default: local)
+  --backend <name>  Select execution backend: local, docker, gvisor, firecracker (default: local)
   --image <image>   Docker/gVisor image to use
   --cpus <limit>    CPU limit for docker/gvisor (e.g. 1.5)
   --memory <limit>  Memory limit for docker/gvisor (e.g. 2gb)
+  --kernel <path>   Path to vmlinux kernel image (firecracker backend)
+  --rootfs <path>   Path to root filesystem ext4 image (firecracker backend)
   --policy <file>   Load a YAML policy file to enforce command rules
   --json            Output the full Observation as JSON
   --yes             Automatically approve commands that require approval
@@ -132,6 +137,7 @@ func cmdRun(args []string) {
   agentsandbox run --backend local "echo hello"
   agentsandbox run --backend docker --image golang:1.26 "go test ./..."
   agentsandbox run --backend gvisor --cpus 1.5 --memory 2gb "go test ./..."
+  agentsandbox run --backend firecracker --kernel vmlinux --rootfs rootfs.ext4 "echo hello"
   agentsandbox run --policy examples/policy.yaml "go test ./..."
   agentsandbox run --json "ls -la"
 `,
@@ -185,6 +191,22 @@ func cmdRun(args []string) {
 			}
 			i++
 			memory = args[i]
+
+		case "--kernel":
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "%s --kernel requires a path to vmlinux\n", color.Red("✗"))
+				os.Exit(1)
+			}
+			i++
+			kernelPath = args[i]
+
+		case "--rootfs":
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "%s --rootfs requires a path to rootfs.ext4\n", color.Red("✗"))
+				os.Exit(1)
+			}
+			i++
+			rootfsPath = args[i]
 
 		case "--policy":
 			if i+1 >= len(args) {
@@ -264,12 +286,25 @@ func cmdRun(args []string) {
 			fmt.Fprintf(os.Stderr, "%s Make sure runsc is configured in Docker\n", color.Dim("Hint:"))
 			os.Exit(1)
 		}
+	case "firecracker":
+		var rtErr error
+		rt, rtErr = firecrackerrt.New(firecrackerrt.Config{
+			WorkDir:    workDir,
+			KernelPath: kernelPath,
+			RootFSPath: rootfsPath,
+			Logger:     logger,
+		})
+		if rtErr != nil {
+			fmt.Fprintf(os.Stderr, "%s Firecracker backend unavailable: %s\n", color.Red("✗"), rtErr)
+			fmt.Fprintf(os.Stderr, "%s Firecracker requires Linux with KVM support\n", color.Dim("Hint:"))
+			os.Exit(1)
+		}
 	default:
 		// Check the registry for dynamically registered backends.
 		factory, exists := runtime.Registry[backendName]
 		if !exists {
 			fmt.Fprintf(os.Stderr, "%s Unknown backend: %q\n", color.Red("✗"), backendName)
-			fmt.Fprintf(os.Stderr, "%s Available backends: local, docker\n", color.Dim("Hint:"))
+			fmt.Fprintf(os.Stderr, "%s Available backends: local, docker, gvisor, firecracker\n", color.Dim("Hint:"))
 			os.Exit(1)
 		}
 		var rtErr error
