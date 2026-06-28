@@ -19,6 +19,7 @@ import (
 	firecrackerrt "github.com/ritikraj2425/agentsandbox/runtimes/firecracker"
 	gvisorrt "github.com/ritikraj2425/agentsandbox/runtimes/gvisor"
 	localrt "github.com/ritikraj2425/agentsandbox/runtimes/local"
+	browserrt "github.com/ritikraj2425/agentsandbox/runtimes/browser"
 )
 
 // ensure backends are imported
@@ -137,6 +138,10 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		rt, err = firecrackerrt.New(firecrackerrt.Config{
 			WorkDir: workDir,
 		})
+	case "browser":
+		rt, err = browserrt.New(browserrt.Config{
+			WorkDir: workDir,
+		})
 	default:
 		// Attempt registry
 		factory, exists := runtime.Registry[req.Backend]
@@ -200,9 +205,7 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 		return
 	}
 
-	action := protocol.NewAction(protocol.ActionTypeShellRun, map[string]interface{}{
-		"command": req.Command,
-	})
+	action := protocol.ParseCommand(req.Command)
 
 	// Execute via runtime
 	obs, err := sess.Runtime.Run(context.Background(), action)

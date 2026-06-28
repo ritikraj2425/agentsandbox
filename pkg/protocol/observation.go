@@ -90,6 +90,16 @@ type Observation struct {
 	// (e.g., "local", "docker", "gvisor"). Enables multi-backend auditing.
 	Backend string `json:"backend,omitempty"`
 
+	// Screenshot holds a base64-encoded PNG screenshot captured by
+	// browser actions. Only populated for browser.screenshot actions.
+	Screenshot string `json:"screenshot,omitempty"`
+
+	// PageTitle is the current browser page title after a browser action.
+	PageTitle string `json:"page_title,omitempty"`
+
+	// PageURL is the current browser URL after a browser action.
+	PageURL string `json:"page_url,omitempty"`
+
 	// CreatedAt is when this observation was generated.
 	CreatedAt time.Time `json:"created_at"`
 }

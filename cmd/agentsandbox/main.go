@@ -33,6 +33,7 @@ import (
 	firecrackerrt "github.com/ritikraj2425/agentsandbox/runtimes/firecracker"
 	gvisorrt "github.com/ritikraj2425/agentsandbox/runtimes/gvisor"
 	localrt "github.com/ritikraj2425/agentsandbox/runtimes/local"
+	browserrt "github.com/ritikraj2425/agentsandbox/runtimes/browser"
 )
 
 const version = "0.6.0"
@@ -303,6 +304,16 @@ func cmdRun(args []string) {
 		if rtErr != nil {
 			fmt.Fprintf(os.Stderr, "%s Firecracker backend unavailable: %s\n", color.Red("✗"), rtErr)
 			fmt.Fprintf(os.Stderr, "%s Firecracker requires Linux with KVM support\n", color.Dim("Hint:"))
+			os.Exit(1)
+		}
+	case "browser":
+		var rtErr error
+		rt, rtErr = browserrt.New(browserrt.Config{
+			WorkDir: workDir,
+			Logger:  logger,
+		})
+		if rtErr != nil {
+			fmt.Fprintf(os.Stderr, "%s Browser backend unavailable: %s\n", color.Red("✗"), rtErr)
 			os.Exit(1)
 		}
 	default:

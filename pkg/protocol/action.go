@@ -17,6 +17,9 @@ package protocol
 import (
 	"crypto/rand"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -117,6 +120,61 @@ func (a Action) Command() string {
 	return ""
 }
 
+// URL extracts the "url" parameter for browser.goto actions.
+func (a Action) URL() string {
+	if u, ok := a.Parameters["url"].(string); ok {
+		return u
+	}
+	return ""
+}
+
+// Selector extracts the "selector" parameter for browser.click actions.
+func (a Action) Selector() string {
+	if s, ok := a.Parameters["selector"].(string); ok {
+		return s
+	}
+	return ""
+}
+
+// Coordinates extracts "x" and "y" parameters for browser.click actions.
+// Returns (0, 0, false) if coordinates are not present.
+func (a Action) Coordinates() (x float64, y float64, ok bool) {
+	xVal, xOk := a.Parameters["x"]
+	yVal, yOk := a.Parameters["y"]
+	if !xOk || !yOk {
+		return 0, 0, false
+	}
+	// JSON numbers decode as float64
+	xf, xfOk := toFloat64(xVal)
+	yf, yfOk := toFloat64(yVal)
+	if !xfOk || !yfOk {
+		return 0, 0, false
+	}
+	return xf, yf, true
+}
+
+// Text extracts the "text" parameter for browser.type actions.
+func (a Action) Text() string {
+	if t, ok := a.Parameters["text"].(string); ok {
+		return t
+	}
+	return ""
+}
+
+// toFloat64 converts a JSON number (which may arrive as float64 or int) to float64.
+func toFloat64(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
 // generateID creates a short random ID with the given prefix.
 // Format: "<prefix>_<8 random hex chars>" (e.g., "act_a1b2c3d4").
 //
@@ -130,4 +188,63 @@ func generateID(prefix string) string {
 	// If it did (broken OS entropy), we'd have bigger problems.
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%s_%x", prefix, b)
+}
+
+// cleanArg removes surrounding parentheses and quotes from a command argument.
+func cleanArg(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+		s = strings.Trim(s, "()")
+	}
+	s = strings.TrimSpace(s)
+	if (strings.HasPrefix(s, "\"") && strings.HasSuffix(s, "\"")) ||
+		(strings.HasPrefix(s, "'") && strings.HasSuffix(s, "'")) {
+		s = s[1 : len(s)-1]
+	}
+	return strings.TrimSpace(s)
+}
+
+// ParseCommand parses a command string (e.g. "browser.goto https://example.com")
+// into a structured Action. If the command does not match any specialized
+// commands (like browser commands), it defaults to a shell.run Action.
+func ParseCommand(cmd string) Action {
+	cmd = strings.TrimSpace(cmd)
+	if strings.HasPrefix(cmd, "browser.goto") {
+		url := cleanArg(strings.TrimPrefix(cmd, "browser.goto"))
+		return NewAction(ActionTypeBrowserGoto, map[string]interface{}{
+			"url": url,
+		})
+	}
+	if cmd == "browser.screenshot" {
+		return NewAction(ActionTypeBrowserScreenshot, nil)
+	}
+	if strings.HasPrefix(cmd, "browser.click") {
+		arg := cleanArg(strings.TrimPrefix(cmd, "browser.click"))
+		if arg == "" {
+			return NewAction(ActionTypeBrowserClick, nil)
+		}
+		// Check if it's two numbers (x, y) separated by space or comma
+		re := regexp.MustCompile(`^(\d+)(?:\s+|,)\s*(\d+)$`)
+		if matches := re.FindStringSubmatch(arg); matches != nil {
+			x, _ := strconv.Atoi(matches[1])
+			y, _ := strconv.Atoi(matches[2])
+			return NewAction(ActionTypeBrowserClick, map[string]interface{}{
+				"x": x,
+				"y": y,
+			})
+		}
+		return NewAction(ActionTypeBrowserClick, map[string]interface{}{
+			"selector": arg,
+		})
+	}
+	if strings.HasPrefix(cmd, "browser.type") {
+		text := cleanArg(strings.TrimPrefix(cmd, "browser.type"))
+		return NewAction(ActionTypeBrowserType, map[string]interface{}{
+			"text": text,
+		})
+	}
+
+	return NewAction(ActionTypeShellRun, map[string]interface{}{
+		"command": cmd,
+	})
 }
