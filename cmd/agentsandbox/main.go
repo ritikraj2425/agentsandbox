@@ -19,10 +19,12 @@ import (
 	"github.com/ritikraj2425/agentsandbox/internal/approvals"
 	"github.com/ritikraj2425/agentsandbox/internal/color"
 	"github.com/ritikraj2425/agentsandbox/internal/fsdiff"
+	"github.com/ritikraj2425/agentsandbox/internal/gateway"
 	"github.com/ritikraj2425/agentsandbox/internal/policy"
 	"github.com/ritikraj2425/agentsandbox/internal/runtime"
 	"github.com/ritikraj2425/agentsandbox/internal/trace"
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
+	"strconv"
 
 	// Import backend packages so their init() functions register with the
 	// runtime registry. Adding a new backend is as simple as adding an
@@ -44,6 +46,8 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		cmdRun(os.Args[2:])
+	case "serve":
+		cmdServe(os.Args[2:])
 	case "version":
 		fmt.Printf("agentsandbox %s\n", version)
 	default:
@@ -61,10 +65,12 @@ func printUsage() {
 
 %s
   run       Run a shell command inside the sandbox
+  serve     Start the Multi-Tenant API Gateway server
   version   Print the AgentSandbox version
 
 %s
   agentsandbox run "echo hello"
+  agentsandbox serve --port 8080 --max-sessions 1000 --auth-key secret
   agentsandbox run --backend local --policy policy.yaml "go test ./..."
   agentsandbox run --json "ls -la"
 
@@ -533,4 +539,60 @@ func printObservation(obs protocol.Observation, logger *trace.RunLogger, policyN
 	}
 
 	fmt.Println()
+}
+
+func cmdServe(args []string) {
+	port := 8080
+	maxSessions := 1000
+	authKey := ""
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--help", "-h":
+			fmt.Printf(`Start the Multi-Tenant API Gateway server
+
+Usage:
+  agentsandbox serve [flags]
+
+Flags:
+  --port <number>         Port to listen on (default: 8080)
+  --max-sessions <number> Maximum concurrent virtual sessions (default: 1000)
+  --auth-key <string>     Required Bearer token for API authentication
+  -h, --help              Show this help message
+`)
+			return
+		case "--port":
+			if i+1 < len(args) {
+				i++
+				p, _ := strconv.Atoi(args[i])
+				if p > 0 {
+					port = p
+				}
+			}
+		case "--max-sessions":
+			if i+1 < len(args) {
+				i++
+				m, _ := strconv.Atoi(args[i])
+				if m > 0 {
+					maxSessions = m
+				}
+			}
+		case "--auth-key":
+			if i+1 < len(args) {
+				i++
+				authKey = args[i]
+			}
+		}
+	}
+
+	if authKey == "" {
+		fmt.Fprintf(os.Stderr, "%s --auth-key is required\n", color.Red("✗"))
+		os.Exit(1)
+	}
+
+	server := gateway.NewServer(port, maxSessions, authKey)
+	if err := server.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Server failed: %s\n", err)
+		os.Exit(1)
+	}
 }
