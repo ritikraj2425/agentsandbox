@@ -32,6 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -79,6 +80,7 @@ type Runtime struct {
 	containerID string
 	cdpClient   *perception.CDPClient
 	hostPort    string
+	vncHostPort string
 }
 
 // New creates a new browser Runtime and validates that Docker is available.
@@ -114,13 +116,18 @@ func (r *Runtime) Start(ctx context.Context) error {
 	args := []string{
 		"run", "-d", "--rm",
 		"-p", fmt.Sprintf("0:%d", r.config.CDPPort),
+		"-p", "0:6080",
 		"--shm-size=256m",
 		r.config.Image,
 		"/bin/sh", "-c",
 		fmt.Sprintf(
-			"node -e \"const net = require('net'); net.createServer(s => { s.on('error', () => {}); const c = net.createConnection({port: %d, host: '127.0.0.1'}); c.on('error', () => s.destroy()); s.pipe(c).pipe(s); }).listen(%d, '0.0.0.0');\" & "+
+			"apt-get update && apt-get install -y --no-install-recommends x11vnc python3-websockify && rm -rf /var/lib/apt/lists/* && "+
+				"node -e \"const net = require('net'); net.createServer(s => { s.on('error', () => {}); const c = net.createConnection({port: %d, host: '127.0.0.1'}); c.on('error', () => s.destroy()); s.pipe(c).pipe(s); }).listen(%d, '0.0.0.0');\" & "+
 				"Xvfb :99 -screen 0 1280x720x24 & "+
 				"export DISPLAY=:99 && "+
+				"sleep 1 && "+
+				"x11vnc -display :99 -nopw -listen 0.0.0.0 -rfbport 5900 -shared -forever -q & "+
+				"websockify 6080 localhost:5900 --web /usr/share/novnc & "+
 				"/ms-playwright/chromium-*/chrome-linux/chrome --headless --no-sandbox --disable-gpu "+
 				"--remote-debugging-port=%d "+
 				"--disable-dev-shm-usage "+
@@ -147,6 +154,15 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to discover CDP port mapping: %w (container logs: %s)", err, string(logs))
 	}
 	r.hostPort = hostPort
+
+	// Discover the mapped VNC/websockify host port (container port 6080).
+	vncPort, err := r.getHostPortForContainer(ctx, 6080)
+	if err != nil {
+		// VNC is optional; log warning but do not fail.
+		log.Printf("Warning: failed to discover VNC port mapping: %v", err)
+	} else {
+		r.vncHostPort = vncPort
+	}
 
 	// Wait for CDP to be ready, then connect.
 	wsURL, err := r.waitForCDP(ctx, 30*time.Second)
@@ -183,6 +199,16 @@ func (r *Runtime) Stop() {
 		r.cdpClient = nil
 	}
 	r.cleanup()
+}
+
+// VNCPort returns the host port mapped to the container's websockify VNC port.
+func (r *Runtime) VNCPort() string {
+	return r.vncHostPort
+}
+
+// CDPClient returns the underlying CDP client for direct access.
+func (r *Runtime) CDPClient() *perception.CDPClient {
+	return r.cdpClient
 }
 
 // Run executes a browser action and returns the Observation.
@@ -312,6 +338,28 @@ func (r *Runtime) getHostPort(ctx context.Context) (string, error) {
 	}
 
 	// Output line is like "0.0.0.0:55123" or "[::]:55123"
+	mapping := strings.TrimSpace(lines[0])
+	parts := strings.Split(mapping, ":")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("unexpected port mapping format: %s", mapping)
+	}
+	return parts[len(parts)-1], nil
+}
+
+// getHostPortForContainer looks up the mapped host port for a specific container port.
+func (r *Runtime) getHostPortForContainer(ctx context.Context, containerPort int) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", "port", r.containerID,
+		fmt.Sprintf("%d/tcp", containerPort))
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("docker port lookup failed for port %d: %w", containerPort, err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		return "", fmt.Errorf("no port mapping found for port %d", containerPort)
+	}
+
 	mapping := strings.TrimSpace(lines[0])
 	parts := strings.Split(mapping, ":")
 	if len(parts) < 2 {

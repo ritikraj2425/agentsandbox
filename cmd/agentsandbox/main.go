@@ -22,6 +22,8 @@ import (
 	"github.com/ritikraj2425/agentsandbox/internal/gateway"
 	"github.com/ritikraj2425/agentsandbox/internal/policy"
 	"github.com/ritikraj2425/agentsandbox/internal/runtime"
+	"github.com/ritikraj2425/agentsandbox/internal/security"
+	"github.com/ritikraj2425/agentsandbox/internal/benchmark"
 	"github.com/ritikraj2425/agentsandbox/internal/trace"
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
 	"strconv"
@@ -49,6 +51,10 @@ func main() {
 		cmdRun(os.Args[2:])
 	case "serve":
 		cmdServe(os.Args[2:])
+	case "benchmark":
+		cmdBenchmark(os.Args[2:])
+	case "test-security":
+		cmdTestSecurity(os.Args[2:])
 	case "version":
 		fmt.Printf("agentsandbox %s\n", version)
 	default:
@@ -65,9 +71,11 @@ func printUsage() {
   agentsandbox <command> [flags]
 
 %s
-  run       Run a shell command inside the sandbox
-  serve     Start the Multi-Tenant API Gateway server
-  version   Print the AgentSandbox version
+  run           Run a shell command inside the sandbox
+  serve         Start the Multi-Tenant API Gateway server
+  benchmark     Run concurrent performance benchmarks
+  test-security Run automated security isolation tests
+  version       Print the AgentSandbox version
 
 %s
   agentsandbox run "echo hello"
@@ -556,6 +564,7 @@ func cmdServe(args []string) {
 	port := 8080
 	maxSessions := 1000
 	authKey := ""
+	corsOrigin := ""
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -569,6 +578,7 @@ Flags:
   --port <number>         Port to listen on (default: 8080)
   --max-sessions <number> Maximum concurrent virtual sessions (default: 1000)
   --auth-key <string>     Required Bearer token for API authentication
+  --cors-origin <string>  Allowed CORS origin for dashboard (default: "")
   -h, --help              Show this help message
 `)
 			return
@@ -593,6 +603,11 @@ Flags:
 				i++
 				authKey = args[i]
 			}
+		case "--cors-origin":
+			if i+1 < len(args) {
+				i++
+				corsOrigin = args[i]
+			}
 		}
 	}
 
@@ -601,9 +616,90 @@ Flags:
 		os.Exit(1)
 	}
 
-	server := gateway.NewServer(port, maxSessions, authKey)
+	workDir, _ := os.Getwd()
+	server := gateway.NewServer(port, maxSessions, authKey, workDir, corsOrigin)
 	if err := server.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Server failed: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func cmdBenchmark(args []string) {
+	backendName := "local"
+	concurrent := 50
+	workDir, _ := os.Getwd()
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--backend":
+			if i+1 < len(args) {
+				i++
+				backendName = args[i]
+			}
+		case "--concurrent":
+			if i+1 < len(args) {
+				i++
+				c, _ := strconv.Atoi(args[i])
+				if c > 0 {
+					concurrent = c
+				}
+			}
+		}
+	}
+
+	factory := func(wd string) (runtime.Runtime, error) {
+		switch backendName {
+		case "local":
+			return localrt.New(wd, nil), nil
+		case "docker":
+			return dockerrt.New(wd, "golang:1.24", nil)
+		case "gvisor":
+			return gvisorrt.New(wd, "golang:1.24", "", "", nil)
+		default:
+			return nil, fmt.Errorf("backend %s not fully supported for benchmark yet", backendName)
+		}
+	}
+
+	if err := benchmark.RunBenchmark(backendName, factory, workDir, concurrent); err != nil {
+		fmt.Fprintf(os.Stderr, "%s Benchmark failed: %v\n", color.Red("✗"), err)
+		os.Exit(1)
+	}
+}
+
+func cmdTestSecurity(args []string) {
+	backendName := "local"
+	workDir, _ := os.Getwd()
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--backend":
+			if i+1 < len(args) {
+				i++
+				backendName = args[i]
+			}
+		}
+	}
+
+	var rt runtime.Runtime
+	var err error
+	switch backendName {
+	case "local":
+		rt = localrt.New(workDir, nil)
+	case "docker":
+		rt, err = dockerrt.New(workDir, "golang:1.24", nil)
+	case "gvisor":
+		rt, err = gvisorrt.New(workDir, "golang:1.24", "", "", nil)
+	default:
+		err = fmt.Errorf("backend %s not supported for security suite", backendName)
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s Failed to init backend: %v\n", color.Red("✗"), err)
+		os.Exit(1)
+	}
+
+	if err := security.RunSuite(backendName, rt, workDir); err != nil {
+		fmt.Fprintf(os.Stderr, "\n%s Security test suite failed!\n", color.Red("✗"))
 		os.Exit(1)
 	}
 }

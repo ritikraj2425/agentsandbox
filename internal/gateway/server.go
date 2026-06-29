@@ -12,14 +12,16 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/ritikraj2425/agentsandbox/internal/observe"
 	"github.com/ritikraj2425/agentsandbox/internal/runtime"
+	"github.com/ritikraj2425/agentsandbox/internal/trace"
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
 	// Import backends to register them
+	browserrt "github.com/ritikraj2425/agentsandbox/runtimes/browser"
 	dockerrt "github.com/ritikraj2425/agentsandbox/runtimes/docker"
 	firecrackerrt "github.com/ritikraj2425/agentsandbox/runtimes/firecracker"
 	gvisorrt "github.com/ritikraj2425/agentsandbox/runtimes/gvisor"
 	localrt "github.com/ritikraj2425/agentsandbox/runtimes/local"
-	browserrt "github.com/ritikraj2425/agentsandbox/runtimes/browser"
 )
 
 // ensure backends are imported
@@ -34,16 +36,22 @@ type Server struct {
 	authKey        string
 	sessionManager *SessionManager
 	rateLimiter    *RateLimiter
+	eventBus       *observe.EventBus
+	workDir        string
+	corsOrigin     string
 }
 
 // NewServer creates a new API Gateway Server instance.
-func NewServer(port int, maxSessions int, authKey string) *Server {
+func NewServer(port int, maxSessions int, authKey string, workDir string, corsOrigin string) *Server {
 	return &Server{
 		port:           port,
 		authKey:        authKey,
-		sessionManager: NewSessionManager(maxSessions),
+		sessionManager: NewSessionManager(maxSessions, workDir),
 		// 10 requests per second with a burst of 20
 		rateLimiter: NewRateLimiter(rate.Limit(10), 20),
+		eventBus:    observe.NewEventBus(),
+		workDir:     workDir,
+		corsOrigin:  corsOrigin,
 	}
 }
 
@@ -51,18 +59,36 @@ func NewServer(port int, maxSessions int, authKey string) *Server {
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
-	// Wrap handlers in RateLimit and Auth middleware
+	// Existing API routes — wrapped in RateLimit and Bearer Auth middleware.
 	mux.HandleFunc("/v1/sessions", s.rateLimiter.Middleware(
 		AuthMiddleware(s.authKey, s.handleCreateSession)))
 	mux.HandleFunc("/v1/sessions/", s.rateLimiter.Middleware(
 		AuthMiddleware(s.authKey, s.handleSessionRoute)))
 
+	// --- Dashboard Auth routes ---
+	mux.HandleFunc("/v1/auth/login", s.handleLogin)
+	mux.Handle("/v1/auth/me", JWTAuthMiddleware(s.authKey, http.HandlerFunc(s.handleMe)))
+
+	// --- Dashboard Runs routes ---
+	mux.Handle("/v1/runs", JWTAuthMiddleware(s.authKey, http.HandlerFunc(s.handleListRuns)))
+	mux.Handle("/v1/runs/", JWTAuthMiddleware(s.authKey, http.HandlerFunc(s.handleRunRoute)))
+
+	// --- Dashboard Sessions routes ---
+	mux.Handle("/v1/dashboard/sessions", JWTAuthMiddleware(s.authKey, http.HandlerFunc(s.handleListActiveSessions)))
+	mux.Handle("/v1/dashboard/sessions/", JWTAuthMiddleware(s.authKey, http.HandlerFunc(s.handleDashboardSessionRoute)))
+
 	// Start background cleanup
 	go s.sessionManager.CleanupLoop(1 * time.Minute)
 
+	// Optionally wrap the entire mux with CORS middleware.
+	var handler http.Handler = mux
+	if s.corsOrigin != "" {
+		handler = CORSMiddleware(s.corsOrigin, mux)
+	}
+
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("Starting Multi-Tenant API Gateway on %s", addr)
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, handler)
 }
 
 // handleSessionRoute routes requests to specific session sub-paths.
@@ -87,6 +113,37 @@ func (s *Server) handleSessionRoute(w http.ResponseWriter, r *http.Request) {
 
 	if len(parts) == 2 && parts[1] == "stream" {
 		HandleWebSocketStream(s.sessionManager, w, r, sessionID)
+		return
+	}
+
+	http.Error(w, "Not Found", http.StatusNotFound)
+}
+
+// handleRunRoute parses the run ID from the URL path and dispatches to handleGetRun.
+func (s *Server) handleRunRoute(w http.ResponseWriter, r *http.Request) {
+	runID := strings.TrimPrefix(r.URL.Path, "/v1/runs/")
+	if runID == "" {
+		http.Error(w, "Run ID required", http.StatusBadRequest)
+		return
+	}
+	s.handleGetRun(w, r, runID)
+}
+
+// handleDashboardSessionRoute routes dashboard session sub-paths for VNC and events.
+func (s *Server) handleDashboardSessionRoute(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/dashboard/sessions/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.Error(w, "Session ID required", http.StatusBadRequest)
+		return
+	}
+	sessionID := parts[0]
+
+	if len(parts) == 2 && parts[1] == "vnc" {
+		s.handleGetVNCEndpoint(w, r, sessionID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "events" {
+		s.handleSessionEvents(w, r, sessionID)
 		return
 	}
 
@@ -207,11 +264,57 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 
 	action := protocol.ParseCommand(req.Command)
 
+	if sess.Logger != nil {
+		sess.Logger.LogEvent(trace.EventTypeActionReceived, "Action received", map[string]interface{}{
+			"command": req.Command,
+		})
+		sess.Logger.LogEvent(trace.EventTypeProcessStarted, "Executing action", nil)
+	}
+
+	// Publish action received
+	s.eventBus.Publish(observe.SessionEvent{
+		SessionID: sessionID,
+		Type:      "action.received",
+		Payload:   map[string]interface{}{"command": req.Command},
+		Timestamp: time.Now().UTC(),
+	})
+
 	// Execute via runtime
 	obs, err := sess.Runtime.Run(context.Background(), action)
 	if err != nil {
-		// Even if error, observation might hold partial state
+		if sess.Logger != nil {
+			sess.Logger.LogEvent(trace.EventTypeError, "Execution failed", map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
 	}
+
+	if sess.Logger != nil {
+		if obs.StdoutSummary != "" {
+			sess.Logger.WriteStdout(obs.StdoutSummary)
+		}
+		if obs.StderrSummary != "" {
+			sess.Logger.WriteStderr(obs.StderrSummary)
+		}
+		
+		eventData := map[string]interface{}{
+			"exit_code":   obs.ExitCode,
+			"duration_ms": obs.DurationMs,
+		}
+		if obs.Screenshot != "" {
+			eventData["screenshot"] = obs.Screenshot
+		}
+
+		sess.Logger.LogEvent(trace.EventTypeProcessFinished, "Action finished", eventData)
+	}
+
+	// Publish process finished
+	s.eventBus.Publish(observe.SessionEvent{
+		SessionID: sessionID,
+		Type:      "process.finished",
+		Payload:   map[string]interface{}{"exit_code": obs.ExitCode, "duration_ms": obs.DurationMs},
+		Timestamp: time.Now().UTC(),
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(obs)

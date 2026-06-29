@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: #0A0A0B;
+  --color-surface: #141416;
+  --color-surface-hover: #1A1A1D;
+  --color-border: #232326;
+  --color-border-subtle: #1C1C1F;
+  --color-foreground: #E4E4E7;
+  --color-muted: #71717A;
+  --color-muted-foreground: #A1A1AA;
+  --color-primary: #5EEAD4;
+  --color-primary-hover: #2DD4BF;
+  --color-primary-muted: rgba(94, 234, 212, 0.1);
+  --color-success: #34D399;
+  --color-success-muted: rgba(52, 211, 153, 0.1);
+  --color-error: #F87171;
+  --color-error-muted: rgba(248, 113, 113, 0.1);
+  --color-warning: #FBBF24;
+  --color-warning-muted: rgba(251, 191, 36, 0.1);
+  --color-info: #818CF8;
+  --color-info-muted: rgba(129, 140, 248, 0.1);
+
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains);
+}
+
+/* ── Base ────────────────────────────────────────────── */
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Custom scrollbar ────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #232326;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3F3F46;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #232326 transparent;
+}
+
+/* ── Selection ───────────────────────────────────────── */
+::selection {
+  background: rgba(94, 234, 212, 0.2);
+  color: #E4E4E7;
+}
+
+/* ── Focus ring ──────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ── Transitions ─────────────────────────────────────── */
+a, button, input, [role="button"] {
+  transition: all 0.15s ease;
+}
+
+/* ── Code & Mono ─────────────────────────────────────── */
+code, pre, .font-mono {
+  font-family: var(--font-mono), 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ── Card hover effect ───────────────────────────────── */
+.card-interactive {
+  transition: all 0.2s ease;
+}
+
+.card-interactive:hover {
+  background: var(--color-surface-hover);
+  border-color: #3F3F46;
+}
+
+/* ── Animations ──────────────────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.5); }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+  20%, 40%, 60%, 80% { transform: translateX(4px); }
+}
+
+.animate-shake {
+  animation: shake 0.6s ease-in-out;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #141416 25%, #232326 50%, #141416 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 6px;
+}
