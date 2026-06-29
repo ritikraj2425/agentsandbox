@@ -61,3 +61,7 @@ Thumbs.db
 # The Go module cache is stored globally at ~/go/pkg/mod/ by default.
 # Some setups place it locally — ignore it if so.
 vendor/
+
+# Go build cache
+.gocache/
+

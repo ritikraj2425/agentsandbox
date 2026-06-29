@@ -427,6 +427,47 @@ func TestActionPolicy_DeniesBrowserDomainUsingParsedURL(t *testing.T) {
 	}
 }
 
+func TestActionPolicy_BlocksInternalBrowserHostByDefault(t *testing.T) {
+	pol := &ActionPolicy{
+		Name:               "browser",
+		AllowedActionTypes: []protocol.ActionType{protocol.ActionTypeBrowserGoto},
+		Browser: BrowserRules{
+			AllowDomains: []string{"example.com"},
+		},
+	}
+	action := protocol.NewAction(protocol.ActionTypeBrowserGoto, map[string]interface{}{
+		"url": "http://169.254.169.254/latest/meta-data",
+	})
+
+	decision := pol.EvaluateAction(action, t.TempDir())
+
+	if decision.Allowed {
+		t.Fatal("expected metadata IP to be denied")
+	}
+	if decision.MatchedRule != "internal_network" {
+		t.Fatalf("expected internal_network rule, got %s", decision.MatchedRule)
+	}
+}
+
+func TestActionPolicy_AllowsExplicitInternalBrowserHost(t *testing.T) {
+	pol := &ActionPolicy{
+		Name:               "browser",
+		AllowedActionTypes: []protocol.ActionType{protocol.ActionTypeBrowserGoto},
+		Browser: BrowserRules{
+			AllowDomains: []string{"localhost"},
+		},
+	}
+	action := protocol.NewAction(protocol.ActionTypeBrowserGoto, map[string]interface{}{
+		"url": "http://localhost:3000",
+	})
+
+	decision := pol.EvaluateAction(action, t.TempDir())
+
+	if !decision.Allowed {
+		t.Fatalf("expected explicit localhost allow, got %s", decision.Reason)
+	}
+}
+
 func TestActionPolicy_DeniesFileWorkspaceEscape(t *testing.T) {
 	pol := &ActionPolicy{
 		Name:               "files",

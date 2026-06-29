@@ -74,6 +74,9 @@ const (
 	// EventTypeApprovalDecision records the human's response to an approval request.
 	EventTypeApprovalDecision EventType = "approval.decision"
 
+	// EventTypeHumanInteraction records scoped end-user browser handoff events.
+	EventTypeHumanInteraction EventType = "human.interaction"
+
 	// EventTypeProcessStarted records the exact moment the OS process launched.
 	EventTypeOutput EventType = "output"
 	// EventTypeError records an error during execution (legacy).

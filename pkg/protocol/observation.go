@@ -33,6 +33,9 @@ const (
 	// approves it. Kept separate from the older approval_required value for API
 	// responses that need to distinguish a queued approval state.
 	ObsStatusWaitingForApproval ObservationStatus = "waiting_for_approval"
+
+	// ObsStatusWaitingForUser means browser control has been handed to an end user.
+	ObsStatusWaitingForUser ObservationStatus = "waiting_for_user"
 )
 
 // PolicyDecision describes the policy verdict attached to every observation.
@@ -43,6 +46,21 @@ type PolicyDecision struct {
 	MatchedRule string                 `json:"matched_rule,omitempty"`
 	Reason      string                 `json:"reason"`
 	Details     map[string]interface{} `json:"details,omitempty"`
+}
+
+type ArtifactRef struct {
+	ID  string `json:"id"`
+	URL string `json:"url,omitempty"`
+}
+
+type BrowserMetadata struct {
+	CurrentURL         string        `json:"current_url,omitempty"`
+	Title              string        `json:"title,omitempty"`
+	ConsoleLogs        []string      `json:"console_logs,omitempty"`
+	NetworkRequests    []string      `json:"network_requests,omitempty"`
+	ScreenshotArtifact *ArtifactRef  `json:"screenshot_artifact,omitempty"`
+	UserHandoff        *ArtifactRef  `json:"user_handoff,omitempty"`
+	Extra              []interface{} `json:"extra,omitempty"`
 }
 
 // Observation is the structured result returned after an Action is processed.
@@ -114,6 +132,12 @@ type Observation struct {
 
 	// PageURL is the current browser URL after a browser action.
 	PageURL string `json:"page_url,omitempty"`
+
+	// Artifacts references files produced by this action.
+	Artifacts []ArtifactRef `json:"artifacts,omitempty"`
+
+	// BrowserMetadata captures URL/title/log/network/artifact details.
+	BrowserMetadata *BrowserMetadata `json:"browser_metadata,omitempty"`
 
 	// PolicyDecision records the gateway policy result for this action.
 	PolicyDecision *PolicyDecision `json:"policy_decision,omitempty"`

@@ -15,6 +15,7 @@ action_types:
     - browser.screenshot
     - browser.evaluate
     - browser.assert
+    - browser.user_handoff
     - file.read
     - task.done
   deny:

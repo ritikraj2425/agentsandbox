@@ -147,6 +147,9 @@ func (p *ActionPolicy) evaluateDenyDimensions(action protocol.Action, workspace 
 				return p.decision(false, string(EffectDeny), denied, "blocked by browser deny domain", map[string]interface{}{"domain": domain}), true
 			}
 		}
+		if isInternalBrowserHost(domain) && !domainAllowed(domain, p.Browser.AllowDomains) {
+			return p.decision(false, string(EffectDeny), "internal_network", "blocked internal browser target", map[string]interface{}{"domain": domain}), true
+		}
 	}
 	return protocol.PolicyDecision{}, false
 }
@@ -322,6 +325,27 @@ func domainMatches(domain, policyDomain string) bool {
 		return domain == policyDomain
 	}
 	return domain == policyDomain || strings.HasSuffix(domain, "."+policyDomain)
+}
+
+func domainAllowed(domain string, allowed []string) bool {
+	for _, candidate := range allowed {
+		if domainMatches(domain, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func isInternalBrowserHost(host string) bool {
+	host = strings.ToLower(host)
+	if host == "localhost" || host == "metadata.google.internal" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.String() == "169.254.169.254"
 }
 
 func actionTimeout(action protocol.Action) (time.Duration, bool) {

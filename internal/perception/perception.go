@@ -27,6 +27,7 @@ package perception
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +41,8 @@ type CDPClient struct {
 	mu      sync.Mutex
 	nextID  atomic.Int64
 	timeout time.Duration
+	console []string
+	network []string
 }
 
 // cdpRequest is a JSON-RPC request sent to Chrome.
@@ -52,6 +55,8 @@ type cdpRequest struct {
 // cdpResponse is a JSON-RPC response received from Chrome.
 type cdpResponse struct {
 	ID     int64                  `json:"id"`
+	Method string                 `json:"method,omitempty"`
+	Params map[string]interface{} `json:"params,omitempty"`
 	Result map[string]interface{} `json:"result,omitempty"`
 	Error  *cdpError              `json:"error,omitempty"`
 }
@@ -125,8 +130,8 @@ func (c *CDPClient) send(method string, params map[string]interface{}) (map[stri
 			continue // Skip malformed messages
 		}
 
-		// Skip event notifications (they have no ID or ID=0)
 		if resp.ID != id {
+			c.handleEvent(resp)
 			continue
 		}
 
@@ -136,6 +141,44 @@ func (c *CDPClient) send(method string, params map[string]interface{}) (map[stri
 
 		return resp.Result, nil
 	}
+}
+
+func (c *CDPClient) EnableMetadataCapture() {
+	_, _ = c.send("Runtime.enable", nil)
+	_, _ = c.send("Network.enable", nil)
+	_, _ = c.send("Page.enable", nil)
+}
+
+func (c *CDPClient) handleEvent(ev cdpResponse) {
+	switch ev.Method {
+	case "Runtime.consoleAPICalled":
+		args, _ := ev.Params["args"].([]interface{})
+		var parts []string
+		for _, arg := range args {
+			obj, _ := arg.(map[string]interface{})
+			if value, ok := obj["value"]; ok {
+				parts = append(parts, fmt.Sprint(value))
+			}
+		}
+		if len(parts) > 0 {
+			c.console = append(c.console, strings.Join(parts, " "))
+		}
+	case "Network.requestWillBeSent":
+		req, _ := ev.Params["request"].(map[string]interface{})
+		method, _ := req["method"].(string)
+		url, _ := req["url"].(string)
+		if url != "" {
+			c.network = append(c.network, strings.TrimSpace(method+" "+url))
+		}
+	}
+}
+
+func (c *CDPClient) ConsoleLogs() []string {
+	return append([]string(nil), c.console...)
+}
+
+func (c *CDPClient) NetworkRequests() []string {
+	return append([]string(nil), c.network...)
 }
 
 // --- Public Browser Actions ---
@@ -188,6 +231,9 @@ func (c *CDPClient) Click(x, y float64) error {
 // It uses JavaScript to find the element's bounding box, then dispatches
 // a click at the center of that box.
 func (c *CDPClient) ClickSelector(selector string) error {
+	if err := c.WaitForSelector(selector, 5*time.Second); err != nil {
+		return err
+	}
 	// Use JavaScript to find the element and get its position
 	js := fmt.Sprintf(`
 		(function() {
@@ -217,6 +263,51 @@ func (c *CDPClient) ClickSelector(selector string) error {
 	}
 
 	return c.Click(coords.X, coords.Y)
+}
+
+func (c *CDPClient) PressKey(key string) error {
+	for _, eventType := range []string{"keyDown", "keyUp"} {
+		if _, err := c.send("Input.dispatchKeyEvent", map[string]interface{}{
+			"type": eventType,
+			"key":  key,
+			"text": keyText(key),
+		}); err != nil {
+			return fmt.Errorf("press %s failed: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func keyText(key string) string {
+	if len([]rune(key)) == 1 {
+		return key
+	}
+	return ""
+}
+
+func (c *CDPClient) WaitForSelector(selector string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		result, err := c.Evaluate(fmt.Sprintf("!!document.querySelector(%q)", selector))
+		if err == nil && result == "true" {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for selector %q", selector)
+}
+
+func (c *CDPClient) WaitForText(text string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		expr := fmt.Sprintf("document.body && document.body.innerText.includes(%q)", text)
+		result, err := c.Evaluate(expr)
+		if err == nil && result == "true" {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for text %q", text)
 }
 
 // TypeText types the given text by dispatching individual key events.

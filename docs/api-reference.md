@@ -86,6 +86,7 @@ The legacy `command` field is still supported:
 | `browser.screenshot` | optional `full_page` boolean |
 | `browser.evaluate` | `expression` string |
 | `browser.assert` | `type` string and `expected` value |
+| `browser.user_handoff` | optional `message` string, optional `ttl_seconds` number |
 | `task.done` | optional `summary` string |
 
 ### Response
@@ -106,6 +107,61 @@ The legacy `command` field is still supported:
   }
 }
 ```
+
+Browser screenshots include artifact references:
+```json
+{
+  "artifacts": [
+    {
+      "id": "screenshot_20260629_120000_000000000.png",
+      "url": "/v1/sessions/SESSION_ID/artifacts/screenshot_20260629_120000_000000000.png"
+    }
+  ],
+  "browser_metadata": {
+    "current_url": "https://example.com",
+    "title": "Example Domain",
+    "console_logs": [],
+    "network_requests": [],
+    "screenshot_artifact": {
+      "id": "screenshot_20260629_120000_000000000.png",
+      "url": "/v1/sessions/SESSION_ID/artifacts/screenshot_20260629_120000_000000000.png"
+    }
+  }
+}
+```
+
+---
+
+## Browser User Handoff
+Creates a short-lived browser stream link scoped to one session. This endpoint
+requires the normal API key.
+
+**POST** `/v1/sessions/:id/interactions`
+
+```json
+{
+  "ttl_seconds": 300
+}
+```
+
+Response:
+```json
+{
+  "interaction_id": "abc123",
+  "token": "short-lived-token",
+  "stream_url": "https://api.example.com/v1/interactions/abc123?token=short-lived-token",
+  "expires_at": "2026-06-29T12:05:00Z"
+}
+```
+
+End-user stream metadata does not require dashboard login; it requires only the
+scoped interaction token:
+
+**GET** `/v1/interactions/:interaction_id?token=...`
+
+Complete the handoff:
+
+**POST** `/v1/interactions/:interaction_id/complete?token=...`
 
 ### Error Response
 Invalid action requests return HTTP 400 with a consistent JSON envelope:

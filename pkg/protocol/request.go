@@ -118,6 +118,18 @@ func ValidateAction(actionType ActionType, params map[string]interface{}) *Actio
 			})
 		}
 		return nil
+	case ActionTypeBrowserUserHandoff:
+		if _, ok := params["message"]; ok && !hasString(params, "message") {
+			return invalidParameter(actionType, "browser.user_handoff message must be a string", map[string]interface{}{
+				"field": "message",
+			})
+		}
+		if _, ok := params["ttl_seconds"]; ok && !hasNumber(params, "ttl_seconds") {
+			return invalidParameter(actionType, "browser.user_handoff ttl_seconds must be a number", map[string]interface{}{
+				"field": "ttl_seconds",
+			})
+		}
+		return nil
 	case ActionTypeTaskDone:
 		if _, ok := params["summary"]; ok && !hasString(params, "summary") {
 			return invalidParameter(actionType, "task.done summary must be a string", map[string]interface{}{

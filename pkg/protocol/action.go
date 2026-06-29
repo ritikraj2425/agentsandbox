@@ -77,6 +77,10 @@ const (
 	// Parameters: "type" (string), "expected" (any).
 	ActionTypeBrowserAssert ActionType = "browser.assert"
 
+	// ActionTypeBrowserUserHandoff asks a human user to take over the browser.
+	// Parameters: optional "message" (string), "ttl_seconds" (number).
+	ActionTypeBrowserUserHandoff ActionType = "browser.user_handoff"
+
 	// ActionTypeTaskDone signals the agent considers the task complete.
 	// Parameters: "summary" (string) — what the agent accomplished.
 	ActionTypeTaskDone ActionType = "task.done"

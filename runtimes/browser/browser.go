@@ -96,7 +96,7 @@ func New(cfg Config) (*Runtime, error) {
 	}
 
 	if cfg.Image == "" {
-		cfg.Image = "mcr.microsoft.com/playwright:v1.48.0-noble"
+		cfg.Image = "agentsandbox/browser-runtime:latest"
 	}
 	if cfg.CDPPort == 0 {
 		cfg.CDPPort = DefaultCDPPort
@@ -165,6 +165,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to connect CDP client: %w (container logs: %s)", err, string(logs))
 	}
 	r.cdpClient = cdp
+	r.cdpClient.EnableMetadataCapture()
 
 	if r.config.Logger != nil {
 		r.config.Logger.LogEvent(trace.EventTypeProcessStarted, "Browser container started", map[string]interface{}{
@@ -196,8 +197,7 @@ func (r *Runtime) dockerArgs() []string {
 		r.config.Image,
 		"/bin/sh", "-c",
 		fmt.Sprintf(
-			"apt-get update && apt-get install -y --no-install-recommends x11vnc python3-websockify && rm -rf /var/lib/apt/lists/* && "+
-				"node -e \"const net = require('net'); net.createServer(s => { s.on('error', () => {}); const c = net.createConnection({port: %d, host: '127.0.0.1'}); c.on('error', () => s.destroy()); s.pipe(c).pipe(s); }).listen(%d, '0.0.0.0');\" & "+
+			"node -e \"const net = require('net'); net.createServer(s => { s.on('error', () => {}); const c = net.createConnection({port: %d, host: '127.0.0.1'}); c.on('error', () => s.destroy()); s.pipe(c).pipe(s); }).listen(%d, '0.0.0.0');\" & "+
 				"Xvfb :99 -screen 0 1280x720x24 & "+
 				"export DISPLAY=:99 && "+
 				"sleep 1 && "+
@@ -224,6 +224,17 @@ func (r *Runtime) Stop() {
 // VNCPort returns the host port mapped to the container's websockify VNC port.
 func (r *Runtime) VNCPort() string {
 	return r.vncHostPort
+}
+
+// StreamURL returns the local noVNC websocket URL used as the visual transport.
+func (r *Runtime) StreamURL(host string) string {
+	if r.vncHostPort == "" {
+		return ""
+	}
+	if strings.Contains(host, ":") {
+		host = strings.Split(host, ":")[0]
+	}
+	return fmt.Sprintf("ws://%s:%s", host, r.vncHostPort)
 }
 
 // CDPClient returns the underlying CDP client for direct access.
@@ -256,8 +267,16 @@ func (r *Runtime) Run(ctx context.Context, action protocol.Action) (protocol.Obs
 		err = r.handleClick(action, &obs)
 	case protocol.ActionTypeBrowserType:
 		err = r.handleType(action, &obs)
+	case protocol.ActionTypeBrowserPress:
+		err = r.handlePress(action, &obs)
+	case protocol.ActionTypeBrowserWaitFor:
+		err = r.handleWaitFor(action, &obs)
 	case protocol.ActionTypeBrowserScreenshot:
 		err = r.handleScreenshot(&obs)
+	case protocol.ActionTypeBrowserEvaluate:
+		err = r.handleEvaluate(action, &obs)
+	case protocol.ActionTypeBrowserAssert:
+		err = r.handleAssert(action, &obs)
 	default:
 		obs.Status = protocol.ObsStatusFailed
 		obs.Error = fmt.Sprintf("unsupported browser action type: %s", action.Type)
@@ -283,6 +302,7 @@ func (r *Runtime) Run(ctx context.Context, action protocol.Action) (protocol.Obs
 	if pageURL, uerr := r.cdpClient.GetURL(); uerr == nil {
 		obs.PageURL = pageURL
 	}
+	r.attachMetadata(&obs)
 
 	if r.config.Logger != nil {
 		r.config.Logger.LogEvent(trace.EventTypeProcessFinished, "Browser action completed", map[string]interface{}{
@@ -331,6 +351,37 @@ func (r *Runtime) handleType(action protocol.Action, obs *protocol.Observation) 
 	return r.cdpClient.TypeText(text)
 }
 
+func (r *Runtime) handlePress(action protocol.Action, obs *protocol.Observation) error {
+	key, _ := action.Parameters["key"].(string)
+	if key == "" {
+		return fmt.Errorf("browser.press requires a 'key' parameter")
+	}
+	obs.Command = fmt.Sprintf("browser.press(%q)", key)
+	return r.cdpClient.PressKey(key)
+}
+
+func (r *Runtime) handleWaitFor(action protocol.Action, obs *protocol.Observation) error {
+	timeout := 5 * time.Second
+	if raw, ok := action.Parameters["timeout_ms"]; ok {
+		if ms, ok := numberToFloat(raw); ok && ms > 0 {
+			timeout = time.Duration(ms) * time.Millisecond
+		}
+	}
+	if selector, _ := action.Parameters["selector"].(string); selector != "" {
+		obs.Command = fmt.Sprintf("browser.wait_for selector %s", selector)
+		return r.cdpClient.WaitForSelector(selector, timeout)
+	}
+	if text, _ := action.Parameters["text"].(string); text != "" {
+		obs.Command = fmt.Sprintf("browser.wait_for text %q", text)
+		return r.cdpClient.WaitForText(text, timeout)
+	}
+	obs.Command = fmt.Sprintf("browser.wait_for %s", timeout)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	<-timer.C
+	return nil
+}
+
 func (r *Runtime) handleScreenshot(obs *protocol.Observation) error {
 	obs.Command = "browser.screenshot"
 	base64Data, err := r.cdpClient.CaptureScreenshot()
@@ -341,13 +392,85 @@ func (r *Runtime) handleScreenshot(obs *protocol.Observation) error {
 	obs.StdoutSummary = fmt.Sprintf("[screenshot captured: %d bytes base64]", len(base64Data))
 	if r.config.ArtifactsDir != "" {
 		if err := os.MkdirAll(r.config.ArtifactsDir, 0755); err == nil {
-			path := filepath.Join(r.config.ArtifactsDir, fmt.Sprintf("screenshot_%s.png", time.Now().Format("20060102_150405_000000000")))
+			artifactID := fmt.Sprintf("screenshot_%s.png", time.Now().Format("20060102_150405_000000000"))
+			path := filepath.Join(r.config.ArtifactsDir, artifactID)
 			if png, err := base64.StdEncoding.DecodeString(base64Data); err == nil {
 				_ = os.WriteFile(path, png, 0644)
+				ref := protocol.ArtifactRef{ID: artifactID, URL: "/artifacts/" + artifactID}
+				obs.Artifacts = append(obs.Artifacts, ref)
+				if obs.BrowserMetadata == nil {
+					obs.BrowserMetadata = &protocol.BrowserMetadata{}
+				}
+				obs.BrowserMetadata.ScreenshotArtifact = &ref
 			}
 		}
 	}
 	return nil
+}
+
+func (r *Runtime) handleEvaluate(action protocol.Action, obs *protocol.Observation) error {
+	expression, _ := action.Parameters["expression"].(string)
+	if expression == "" {
+		return fmt.Errorf("browser.evaluate requires an 'expression' parameter")
+	}
+	obs.Command = "browser.evaluate"
+	result, err := r.cdpClient.Evaluate(expression)
+	if err != nil {
+		return err
+	}
+	obs.StdoutSummary = result
+	return nil
+}
+
+func (r *Runtime) handleAssert(action protocol.Action, obs *protocol.Observation) error {
+	assertType, _ := action.Parameters["type"].(string)
+	expected := fmt.Sprint(action.Parameters["expected"])
+	var actual string
+	var err error
+	switch assertType {
+	case "title":
+		actual, err = r.cdpClient.GetTitle()
+	case "url":
+		actual, err = r.cdpClient.GetURL()
+	case "text":
+		actual, err = r.cdpClient.Evaluate("document.body ? document.body.innerText : ''")
+	default:
+		return fmt.Errorf("unsupported browser.assert type: %s", assertType)
+	}
+	if err != nil {
+		return err
+	}
+	obs.Command = fmt.Sprintf("browser.assert %s", assertType)
+	if !strings.Contains(actual, expected) {
+		return fmt.Errorf("assertion failed: expected %q in %q", expected, actual)
+	}
+	obs.StdoutSummary = "assertion passed"
+	return nil
+}
+
+func (r *Runtime) attachMetadata(obs *protocol.Observation) {
+	if obs.BrowserMetadata == nil {
+		obs.BrowserMetadata = &protocol.BrowserMetadata{}
+	}
+	obs.BrowserMetadata.CurrentURL = obs.PageURL
+	obs.BrowserMetadata.Title = obs.PageTitle
+	if r.cdpClient != nil {
+		obs.BrowserMetadata.ConsoleLogs = r.cdpClient.ConsoleLogs()
+		obs.BrowserMetadata.NetworkRequests = r.cdpClient.NetworkRequests()
+	}
+}
+
+func numberToFloat(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
 }
 
 // --- Internal Helpers ---

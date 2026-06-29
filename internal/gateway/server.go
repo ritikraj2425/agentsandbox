@@ -45,6 +45,7 @@ type Server struct {
 	eventBus       *observe.EventBus
 	dbStore        store.Store
 	workDir        string
+	interactions   *InteractionManager
 }
 
 // NewServer creates a new API gateway server.
@@ -60,6 +61,7 @@ func NewServer(port int, maxSessions int, authKey string, workDir string, corsOr
 		eventBus:       eventBus,
 		dbStore:        dbStore,
 		workDir:        workDir,
+		interactions:   NewInteractionManager(authKey),
 	}
 	return s
 }
@@ -73,6 +75,7 @@ func (s *Server) Start() error {
 		s.authMiddleware(http.HandlerFunc(s.handleCreateSession)).ServeHTTP))
 	mux.HandleFunc("/v1/sessions/", s.rateLimiter.Middleware(
 		s.authMiddleware(http.HandlerFunc(s.handleSessionRoute)).ServeHTTP))
+	mux.HandleFunc("/v1/interactions/", s.handleInteractionRoute)
 
 	// --- Dashboard Auth routes ---
 	mux.HandleFunc("/v1/auth/login", s.handleLogin)
@@ -154,6 +157,14 @@ func (s *Server) handleSessionRoute(w http.ResponseWriter, r *http.Request) {
 
 	if len(parts) == 2 && parts[1] == "actions" && r.Method == http.MethodPost {
 		s.handleRunAction(w, r, sessionID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "interactions" && r.Method == http.MethodPost {
+		s.handleCreateInteraction(w, r, sessionID)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "artifacts" && r.Method == http.MethodGet {
+		s.handleGetArtifact(w, r, sessionID, parts[2])
 		return
 	}
 
@@ -349,6 +360,20 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, ses
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleGetArtifact(w http.ResponseWriter, r *http.Request, sessionID string, artifactID string) {
+	sess, err := s.sessionManager.GetSession(sessionID)
+	if err != nil {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+	path, err := workspace.GuardPath(sess.ArtifactsDir, artifactID)
+	if err != nil {
+		http.Error(w, "Invalid artifact path", http.StatusBadRequest)
+		return
+	}
+	http.ServeFile(w, r, path)
+}
+
 type RunActionRequest = protocol.ActionExecutionRequest
 
 type errorResponse struct {
@@ -428,6 +453,13 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 		return
 	}
 
+	if action.Type == protocol.ActionTypeBrowserUserHandoff {
+		obs := s.createUserHandoffObservation(r, sess, action, decision)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(obs)
+		return
+	}
+
 	if sess.Logger != nil {
 		sess.Logger.LogEvent(trace.EventTypeProcessStarted, "Executing action", nil)
 	}
@@ -442,6 +474,7 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 	// Execute via runtime
 	obs, err := sess.Runtime.Run(runCtx, action)
 	obs.PolicyDecision = &decision
+	s.attachArtifactURLs(sessionID, &obs)
 	if err != nil {
 		if sess.Logger != nil {
 			sess.Logger.LogEvent(trace.EventTypeError, "Execution failed", map[string]interface{}{
@@ -479,6 +512,59 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(obs)
+}
+
+func (s *Server) createUserHandoffObservation(r *http.Request, sess *Session, action protocol.Action, decision protocol.PolicyDecision) protocol.Observation {
+	ttl := 5 * time.Minute
+	if raw, ok := action.Parameters["ttl_seconds"]; ok {
+		if seconds, ok := numberToFloat(raw); ok && seconds > 0 {
+			ttl = time.Duration(seconds) * time.Second
+		}
+	}
+	interaction := s.interactions.Create(sess.ID, r.Host, ttl)
+	if sess.Logger != nil {
+		sess.Logger.LogEvent(trace.EventTypeHumanInteraction, "Agent requested user browser handoff", map[string]interface{}{
+			"interaction_id": interaction.ID,
+			"expires_at":     interaction.ExpiresAt,
+		})
+	}
+	obs := protocol.NewObservation(action.ID)
+	obs.Backend = sess.Runtime.Name()
+	obs.Status = protocol.ObsStatusWaitingForUser
+	obs.PolicyDecision = &decision
+	obs.BrowserMetadata = &protocol.BrowserMetadata{
+		UserHandoff: &protocol.ArtifactRef{
+			ID:  interaction.ID,
+			URL: interaction.StreamURL,
+		},
+	}
+	obs.StdoutSummary = "waiting for user browser handoff"
+	return obs
+}
+
+func (s *Server) attachArtifactURLs(sessionID string, obs *protocol.Observation) {
+	for i := range obs.Artifacts {
+		if obs.Artifacts[i].URL == "" || strings.HasPrefix(obs.Artifacts[i].URL, "/artifacts/") {
+			obs.Artifacts[i].URL = fmt.Sprintf("/v1/sessions/%s/artifacts/%s", sessionID, obs.Artifacts[i].ID)
+		}
+		if obs.BrowserMetadata != nil && obs.BrowserMetadata.ScreenshotArtifact != nil &&
+			obs.BrowserMetadata.ScreenshotArtifact.ID == obs.Artifacts[i].ID {
+			obs.BrowserMetadata.ScreenshotArtifact.URL = obs.Artifacts[i].URL
+		}
+	}
+}
+
+func numberToFloat(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
 }
 
 func writeJSONError(w http.ResponseWriter, status int, code string, message string, details map[string]interface{}) {

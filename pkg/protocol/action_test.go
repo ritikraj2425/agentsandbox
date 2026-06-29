@@ -202,6 +202,7 @@ func TestValidateAction_ValidStructuredActions(t *testing.T) {
 		{"browser screenshot", ActionTypeBrowserScreenshot, map[string]interface{}{"full_page": true}},
 		{"browser evaluate", ActionTypeBrowserEvaluate, map[string]interface{}{"expression": "document.title"}},
 		{"browser assert", ActionTypeBrowserAssert, map[string]interface{}{"type": "text", "expected": "Done"}},
+		{"browser user handoff", ActionTypeBrowserUserHandoff, map[string]interface{}{"message": "please log in", "ttl_seconds": 60}},
 		{"task done", ActionTypeTaskDone, map[string]interface{}{"summary": "complete"}},
 	}
 
@@ -233,6 +234,7 @@ func TestValidateAction_InvalidStructuredActions(t *testing.T) {
 		{"browser screenshot full_page wrong type", ActionTypeBrowserScreenshot, map[string]interface{}{"full_page": "yes"}, "invalid_action_parameters"},
 		{"browser evaluate missing expression", ActionTypeBrowserEvaluate, nil, "invalid_action_parameters"},
 		{"browser assert missing expected", ActionTypeBrowserAssert, map[string]interface{}{"type": "text"}, "invalid_action_parameters"},
+		{"browser user handoff ttl wrong type", ActionTypeBrowserUserHandoff, map[string]interface{}{"ttl_seconds": "soon"}, "invalid_action_parameters"},
 		{"task done summary wrong type", ActionTypeTaskDone, map[string]interface{}{"summary": 42}, "invalid_action_parameters"},
 		{"unknown type", ActionType("unknown.action"), nil, "unsupported_action_type"},
 	}
