@@ -141,3 +141,111 @@ func TestParseCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestActionExecutionRequest_ToAction_Structured(t *testing.T) {
+	req := ActionExecutionRequest{
+		Type: ActionTypeShellRun,
+		Parameters: map[string]interface{}{
+			"command": "echo structured",
+		},
+		ClientActionID: "client_123",
+		Command:        "echo legacy",
+	}
+
+	action, err := req.ToAction()
+	if err != nil {
+		t.Fatalf("expected valid action, got error: %v", err)
+	}
+	if action.ID != "client_123" {
+		t.Fatalf("expected client action id, got %s", action.ID)
+	}
+	if action.Type != ActionTypeShellRun {
+		t.Fatalf("expected shell.run, got %s", action.Type)
+	}
+	if action.Command() != "echo structured" {
+		t.Fatalf("expected structured command, got %q", action.Command())
+	}
+}
+
+func TestActionExecutionRequest_ToAction_LegacyCommand(t *testing.T) {
+	req := ActionExecutionRequest{Command: "browser.goto https://example.com"}
+
+	action, err := req.ToAction()
+	if err != nil {
+		t.Fatalf("expected legacy command to parse, got error: %v", err)
+	}
+	if action.Type != ActionTypeBrowserGoto {
+		t.Fatalf("expected browser.goto, got %s", action.Type)
+	}
+	if action.URL() != "https://example.com" {
+		t.Fatalf("expected parsed URL, got %q", action.URL())
+	}
+}
+
+func TestValidateAction_ValidStructuredActions(t *testing.T) {
+	tests := []struct {
+		name       string
+		actionType ActionType
+		params     map[string]interface{}
+	}{
+		{"shell run", ActionTypeShellRun, map[string]interface{}{"command": "pwd"}},
+		{"file read", ActionTypeFileRead, map[string]interface{}{"path": "README.md"}},
+		{"file write", ActionTypeFileWrite, map[string]interface{}{"path": "a.txt", "content": "hello"}},
+		{"file patch", ActionTypeFilePatch, map[string]interface{}{"path": "a.txt", "patch": "@@"}},
+		{"browser goto", ActionTypeBrowserGoto, map[string]interface{}{"url": "https://example.com"}},
+		{"browser click selector", ActionTypeBrowserClick, map[string]interface{}{"selector": "#submit"}},
+		{"browser click coordinates", ActionTypeBrowserClick, map[string]interface{}{"x": 10, "y": 20}},
+		{"browser type", ActionTypeBrowserType, map[string]interface{}{"text": "hello"}},
+		{"browser press", ActionTypeBrowserPress, map[string]interface{}{"key": "Enter"}},
+		{"browser wait selector", ActionTypeBrowserWaitFor, map[string]interface{}{"selector": "#ready"}},
+		{"browser wait timeout", ActionTypeBrowserWaitFor, map[string]interface{}{"timeout_ms": 1000}},
+		{"browser screenshot", ActionTypeBrowserScreenshot, map[string]interface{}{"full_page": true}},
+		{"browser evaluate", ActionTypeBrowserEvaluate, map[string]interface{}{"expression": "document.title"}},
+		{"browser assert", ActionTypeBrowserAssert, map[string]interface{}{"type": "text", "expected": "Done"}},
+		{"task done", ActionTypeTaskDone, map[string]interface{}{"summary": "complete"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateAction(tt.actionType, tt.params); err != nil {
+				t.Fatalf("expected valid action, got error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateAction_InvalidStructuredActions(t *testing.T) {
+	tests := []struct {
+		name       string
+		actionType ActionType
+		params     map[string]interface{}
+		code       string
+	}{
+		{"shell missing command", ActionTypeShellRun, nil, "invalid_action_parameters"},
+		{"file read path wrong type", ActionTypeFileRead, map[string]interface{}{"path": 1}, "invalid_action_parameters"},
+		{"file write missing content", ActionTypeFileWrite, map[string]interface{}{"path": "a.txt"}, "invalid_action_parameters"},
+		{"file patch missing patch", ActionTypeFilePatch, map[string]interface{}{"path": "a.txt"}, "invalid_action_parameters"},
+		{"browser goto missing url", ActionTypeBrowserGoto, nil, "invalid_action_parameters"},
+		{"browser click incomplete coordinates", ActionTypeBrowserClick, map[string]interface{}{"x": 1}, "invalid_action_parameters"},
+		{"browser type missing text", ActionTypeBrowserType, nil, "invalid_action_parameters"},
+		{"browser press missing key", ActionTypeBrowserPress, nil, "invalid_action_parameters"},
+		{"browser wait missing condition", ActionTypeBrowserWaitFor, nil, "invalid_action_parameters"},
+		{"browser screenshot full_page wrong type", ActionTypeBrowserScreenshot, map[string]interface{}{"full_page": "yes"}, "invalid_action_parameters"},
+		{"browser evaluate missing expression", ActionTypeBrowserEvaluate, nil, "invalid_action_parameters"},
+		{"browser assert missing expected", ActionTypeBrowserAssert, map[string]interface{}{"type": "text"}, "invalid_action_parameters"},
+		{"task done summary wrong type", ActionTypeTaskDone, map[string]interface{}{"summary": 42}, "invalid_action_parameters"},
+		{"unknown type", ActionType("unknown.action"), nil, "unsupported_action_type"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateAction(tt.actionType, tt.params)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if err.Code != tt.code {
+				t.Fatalf("expected code %s, got %s", tt.code, err.Code)
+			}
+		})
+	}
+}

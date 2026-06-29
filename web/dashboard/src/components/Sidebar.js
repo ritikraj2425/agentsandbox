@@ -2,15 +2,16 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Activity, Terminal, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Activity, Terminal, Settings, ChevronLeft, ChevronRight, Key, CreditCard } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
 const navItems = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/', label: 'Overview', icon: LayoutDashboard },
+  { href: '/keys', label: 'API Keys', icon: Key },
   { href: '/sessions', label: 'Sessions', icon: Activity },
-  { href: '/runs', label: 'Runs', icon: Terminal },
+  { href: '/billing', label: 'Billing', icon: CreditCard },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ritikraj2425/agentsandbox/internal/observe"
 	"github.com/ritikraj2425/agentsandbox/internal/runtime"
+	"github.com/ritikraj2425/agentsandbox/internal/store"
 	"github.com/ritikraj2425/agentsandbox/internal/trace"
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
 	// Import backends to register them
@@ -30,29 +31,34 @@ var _ = localrt.New
 var _ = gvisorrt.New
 var _ = firecrackerrt.New
 
-// Server represents the API Gateway HTTP server.
+// Server handles HTTP/WebSocket communication for the sandbox.
 type Server struct {
 	port           int
-	authKey        string
+	authKey        string // Keeping for backwards compatibility if needed, but db preferred
+	corsOrigin     string
+	router         *http.ServeMux
 	sessionManager *SessionManager
 	rateLimiter    *RateLimiter
 	eventBus       *observe.EventBus
+	dbStore        store.Store
 	workDir        string
-	corsOrigin     string
 }
 
-// NewServer creates a new API Gateway Server instance.
-func NewServer(port int, maxSessions int, authKey string, workDir string, corsOrigin string) *Server {
-	return &Server{
+// NewServer creates a new API gateway server.
+func NewServer(port int, maxSessions int, authKey string, workDir string, corsOrigin string, dbStore store.Store) *Server {
+	eventBus := observe.NewEventBus()
+	s := &Server{
 		port:           port,
 		authKey:        authKey,
+		corsOrigin:     corsOrigin,
+		router:         http.NewServeMux(),
 		sessionManager: NewSessionManager(maxSessions, workDir),
-		// 10 requests per second with a burst of 20
-		rateLimiter: NewRateLimiter(rate.Limit(10), 20),
-		eventBus:    observe.NewEventBus(),
-		workDir:     workDir,
-		corsOrigin:  corsOrigin,
+		rateLimiter:    NewRateLimiter(rate.Limit(10), 20),
+		eventBus:       eventBus,
+		dbStore:        dbStore,
+		workDir:        workDir,
 	}
+	return s
 }
 
 // Start boots up the HTTP server and blocks.
@@ -61,9 +67,9 @@ func (s *Server) Start() error {
 
 	// Existing API routes — wrapped in RateLimit and Bearer Auth middleware.
 	mux.HandleFunc("/v1/sessions", s.rateLimiter.Middleware(
-		AuthMiddleware(s.authKey, s.handleCreateSession)))
+		s.authMiddleware(http.HandlerFunc(s.handleCreateSession)).ServeHTTP))
 	mux.HandleFunc("/v1/sessions/", s.rateLimiter.Middleware(
-		AuthMiddleware(s.authKey, s.handleSessionRoute)))
+		s.authMiddleware(http.HandlerFunc(s.handleSessionRoute)).ServeHTTP))
 
 	// --- Dashboard Auth routes ---
 	mux.HandleFunc("/v1/auth/login", s.handleLogin)
@@ -89,6 +95,43 @@ func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("Starting Multi-Tenant API Gateway on %s", addr)
 	return http.ListenAndServe(addr, handler)
+}
+
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "Unauthorized: Missing Authorization header", http.StatusUnauthorized)
+			return
+		}
+
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			http.Error(w, "Unauthorized: Invalid Authorization format", http.StatusUnauthorized)
+			return
+		}
+
+		rawKey := parts[1]
+
+		if s.dbStore != nil {
+			// Database Authentication
+			user, err := s.dbStore.ValidateAPIKey(r.Context(), rawKey)
+			if err != nil {
+				http.Error(w, "Unauthorized: Invalid or revoked API key", http.StatusUnauthorized)
+				return
+			}
+			// Set user context if needed later
+			r = r.WithContext(context.WithValue(r.Context(), "user", user))
+		} else {
+			// Legacy fallback for single static auth key
+			if authHeader != "Bearer "+s.authKey {
+				http.Error(w, "Unauthorized: Invalid API key", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleSessionRoute routes requests to specific session sub-paths.
@@ -224,6 +267,20 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.dbStore != nil {
+		userID := "legacy-admin"
+		if u, ok := r.Context().Value("user").(*store.User); ok && u != nil {
+			userID = u.ID
+		}
+		s.dbStore.CreateSession(r.Context(), store.SessionRecord{
+			ID:        sess.ID,
+			UserID:    userID,
+			Backend:   req.Backend,
+			Status:    "running",
+			CreatedAt: sess.CreatedAt,
+		})
+	}
+
 	resp := CreateSessionResponse{
 		SessionID: sess.ID,
 		ExpiresAt: sess.ExpiresAt,
@@ -242,11 +299,24 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, ses
 	}
 
 	s.sessionManager.DeleteSession(sessionID)
+
+	if s.dbStore != nil {
+		s.dbStore.UpdateSessionStatus(r.Context(), sessionID, "completed")
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type RunActionRequest struct {
-	Command string `json:"command"`
+type RunActionRequest = protocol.ActionExecutionRequest
+
+type errorResponse struct {
+	Error errorBody `json:"error"`
+}
+
+type errorBody struct {
+	Code    string                 `json:"code"`
+	Message string                 `json:"message"`
+	Details map[string]interface{} `json:"details,omitempty"`
 }
 
 func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, sessionID string) {
@@ -258,15 +328,25 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 
 	var req RunActionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON payload", map[string]interface{}{
+			"error": err.Error(),
+		})
 		return
 	}
 
-	action := protocol.ParseCommand(req.Command)
+	action, actionErr := req.ToAction()
+	if actionErr != nil {
+		writeJSONError(w, http.StatusBadRequest, actionErr.Code, actionErr.Message, actionErr.Details)
+		return
+	}
+
+	// Phase 2 policy hook: structured actions are normalized before execution.
 
 	if sess.Logger != nil {
 		sess.Logger.LogEvent(trace.EventTypeActionReceived, "Action received", map[string]interface{}{
-			"command": req.Command,
+			"action_id": action.ID,
+			"type":      string(action.Type),
+			"command":   req.Command,
 		})
 		sess.Logger.LogEvent(trace.EventTypeProcessStarted, "Executing action", nil)
 	}
@@ -275,7 +355,11 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 	s.eventBus.Publish(observe.SessionEvent{
 		SessionID: sessionID,
 		Type:      "action.received",
-		Payload:   map[string]interface{}{"command": req.Command},
+		Payload: map[string]interface{}{
+			"action_id": action.ID,
+			"type":      string(action.Type),
+			"command":   req.Command,
+		},
 		Timestamp: time.Now().UTC(),
 	})
 
@@ -296,7 +380,7 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 		if obs.StderrSummary != "" {
 			sess.Logger.WriteStderr(obs.StderrSummary)
 		}
-		
+
 		eventData := map[string]interface{}{
 			"exit_code":   obs.ExitCode,
 			"duration_ms": obs.DurationMs,
@@ -318,4 +402,16 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(obs)
+}
+
+func writeJSONError(w http.ResponseWriter, status int, code string, message string, details map[string]interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(errorResponse{
+		Error: errorBody{
+			Code:    code,
+			Message: message,
+			Details: details,
+		},
+	})
 }

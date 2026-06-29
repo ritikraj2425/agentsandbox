@@ -17,13 +17,14 @@ import (
 	"os"
 
 	"github.com/ritikraj2425/agentsandbox/internal/approvals"
+	"github.com/ritikraj2425/agentsandbox/internal/benchmark"
 	"github.com/ritikraj2425/agentsandbox/internal/color"
 	"github.com/ritikraj2425/agentsandbox/internal/fsdiff"
 	"github.com/ritikraj2425/agentsandbox/internal/gateway"
 	"github.com/ritikraj2425/agentsandbox/internal/policy"
 	"github.com/ritikraj2425/agentsandbox/internal/runtime"
 	"github.com/ritikraj2425/agentsandbox/internal/security"
-	"github.com/ritikraj2425/agentsandbox/internal/benchmark"
+	"github.com/ritikraj2425/agentsandbox/internal/store"
 	"github.com/ritikraj2425/agentsandbox/internal/trace"
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
 	"strconv"
@@ -31,11 +32,11 @@ import (
 	// Import backend packages so their init() functions register with the
 	// runtime registry. Adding a new backend is as simple as adding an
 	// import line here — the CLI does not need any other changes.
+	browserrt "github.com/ritikraj2425/agentsandbox/runtimes/browser"
 	dockerrt "github.com/ritikraj2425/agentsandbox/runtimes/docker"
 	firecrackerrt "github.com/ritikraj2425/agentsandbox/runtimes/firecracker"
 	gvisorrt "github.com/ritikraj2425/agentsandbox/runtimes/gvisor"
 	localrt "github.com/ritikraj2425/agentsandbox/runtimes/local"
-	browserrt "github.com/ritikraj2425/agentsandbox/runtimes/browser"
 )
 
 const version = "0.6.0"
@@ -55,6 +56,8 @@ func main() {
 		cmdBenchmark(os.Args[2:])
 	case "test-security":
 		cmdTestSecurity(os.Args[2:])
+	case "admin":
+		cmdAdmin(os.Args[2:])
 	case "version":
 		fmt.Printf("agentsandbox %s\n", version)
 	default:
@@ -75,6 +78,7 @@ func printUsage() {
   serve         Start the Multi-Tenant API Gateway server
   benchmark     Run concurrent performance benchmarks
   test-security Run automated security isolation tests
+  admin         Admin commands for managing the sandbox (e.g., create-key)
   version       Print the AgentSandbox version
 
 %s
@@ -561,10 +565,11 @@ func printObservation(obs protocol.Observation, logger *trace.RunLogger, policyN
 }
 
 func cmdServe(args []string) {
-	port := 8080
-	maxSessions := 1000
-	authKey := ""
-	corsOrigin := ""
+	port := envInt("AGENTSANDBOX_PORT", 8080)
+	maxSessions := envInt("AGENTSANDBOX_MAX_SESSIONS", 1000)
+	authKey := os.Getenv("AGENTSANDBOX_AUTH_KEY")
+	corsOrigin := os.Getenv("AGENTSANDBOX_CORS_ORIGIN")
+	dbUrl := os.Getenv("DATABASE_URL")
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -575,11 +580,18 @@ Usage:
   agentsandbox serve [flags]
 
 Flags:
-  --port <number>         Port to listen on (default: 8080)
-  --max-sessions <number> Maximum concurrent virtual sessions (default: 1000)
-  --auth-key <string>     Required Bearer token for API authentication
-  --cors-origin <string>  Allowed CORS origin for dashboard (default: "")
-  -h, --help              Show this help message
+  --port <int>           Port to listen on (default 8080)
+  --max-sessions <int>   Maximum concurrent sessions (default 1000)
+  --auth-key <string>    (Legacy) Static Bearer token for API authentication
+  --cors-origin <string> Allowed CORS origin (default empty = none)
+  --db-url <string>      Database URL (e.g. postgres://user:pass@localhost:5432/db?sslmode=disable)
+
+Environment:
+  AGENTSANDBOX_PORT
+  AGENTSANDBOX_MAX_SESSIONS
+  AGENTSANDBOX_AUTH_KEY
+  AGENTSANDBOX_CORS_ORIGIN
+  DATABASE_URL
 `)
 			return
 		case "--port":
@@ -608,6 +620,11 @@ Flags:
 				i++
 				corsOrigin = args[i]
 			}
+		case "--db-url":
+			if i+1 < len(args) {
+				i++
+				dbUrl = args[i]
+			}
 		}
 	}
 
@@ -616,10 +633,113 @@ Flags:
 		os.Exit(1)
 	}
 
+	var dbStore store.Store
+	if dbUrl != "" {
+		s, err := store.NewPostgresStore(dbUrl)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to connect to database: %v\n", err)
+			os.Exit(1)
+		}
+		if err := s.Init(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to initialize database schema: %v\n", err)
+			os.Exit(1)
+		}
+		dbStore = s
+		fmt.Printf("Connected to database: %s\n", dbUrl)
+	}
+
 	workDir, _ := os.Getwd()
-	server := gateway.NewServer(port, maxSessions, authKey, workDir, corsOrigin)
+	server := gateway.NewServer(port, maxSessions, authKey, workDir, corsOrigin, dbStore)
 	if err := server.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Server failed: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func envInt(name string, fallback int) int {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func cmdAdmin(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Admin requires a subcommand (e.g. create-key)")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "create-key":
+		dbUrl := "postgres://postgres:postgres@localhost:5432/agentsandbox?sslmode=disable"
+		email := ""
+		name := "default"
+
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--db-url":
+				if i+1 < len(args) {
+					i++
+					dbUrl = args[i]
+				}
+			case "--email":
+				if i+1 < len(args) {
+					i++
+					email = args[i]
+				}
+			case "--name":
+				if i+1 < len(args) {
+					i++
+					name = args[i]
+				}
+			}
+		}
+
+		if email == "" {
+			fmt.Println("Error: --email is required")
+			os.Exit(1)
+		}
+
+		ctx := context.Background()
+		s, err := store.NewPostgresStore(dbUrl)
+		if err != nil {
+			fmt.Printf("DB connection failed: %v\n", err)
+			os.Exit(1)
+		}
+		if err := s.Init(ctx); err != nil {
+			fmt.Printf("DB init failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		user, err := s.GetUserByEmail(ctx, email)
+		if err != nil {
+			user, err = s.CreateUser(ctx, email)
+			if err != nil {
+				fmt.Printf("Failed to create user: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Created new user: %s (ID: %s)\n", user.Email, user.ID)
+		} else {
+			fmt.Printf("Found existing user: %s (ID: %s)\n", user.Email, user.ID)
+		}
+
+		rawKey, err := s.GenerateAPIKey(ctx, user.ID, name)
+		if err != nil {
+			fmt.Printf("Failed to generate key: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("\nSUCCESS! API Key generated for %s.\n", email)
+		fmt.Printf("Keep this key safe, it will NOT be shown again:\n\n")
+		fmt.Printf("  %s\n\n", color.BoldCyan(rawKey))
+
+	default:
+		fmt.Printf("Unknown admin subcommand: %s\n", args[0])
 		os.Exit(1)
 	}
 }

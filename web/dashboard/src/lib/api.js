@@ -1,7 +1,8 @@
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 async function request(path, options = {}) {
-  const url = `${BASE_URL}${path}`;
+  const gatewayPath = BASE_URL && path.startsWith('/api/') ? path.slice(4) : path;
+  const url = `${BASE_URL}${gatewayPath}`;
   const config = {
     credentials: 'include',
     cache: 'no-store',

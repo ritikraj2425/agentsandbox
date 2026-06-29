@@ -57,9 +57,25 @@ const (
 	// Parameters: "text" (string).
 	ActionTypeBrowserType ActionType = "browser.type"
 
+	// ActionTypeBrowserPress sends a keyboard key press.
+	// Parameters: "key" (string).
+	ActionTypeBrowserPress ActionType = "browser.press"
+
+	// ActionTypeBrowserWaitFor waits for a selector, text, or timeout.
+	// Parameters: "selector" (string), "text" (string), or "timeout_ms" (number).
+	ActionTypeBrowserWaitFor ActionType = "browser.wait_for"
+
 	// ActionTypeBrowserScreenshot captures a screenshot of the current page.
 	// No parameters required.
 	ActionTypeBrowserScreenshot ActionType = "browser.screenshot"
+
+	// ActionTypeBrowserEvaluate evaluates a JavaScript expression in the page.
+	// Parameters: "expression" (string).
+	ActionTypeBrowserEvaluate ActionType = "browser.evaluate"
+
+	// ActionTypeBrowserAssert checks a page assertion.
+	// Parameters: "type" (string), "expected" (any).
+	ActionTypeBrowserAssert ActionType = "browser.assert"
 
 	// ActionTypeTaskDone signals the agent considers the task complete.
 	// Parameters: "summary" (string) — what the agent accomplished.

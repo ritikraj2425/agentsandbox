@@ -1,0 +1,15 @@
+[Unit]
+Description=AgentSandbox API Gateway
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=agentsandbox
+WorkingDirectory=/opt/agentsandbox
+ExecStart=/opt/agentsandbox/agentsandbox serve --port 8080 --db-url /opt/agentsandbox/agentsandbox.db
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

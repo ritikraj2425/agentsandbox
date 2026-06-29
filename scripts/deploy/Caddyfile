@@ -1,0 +1,18 @@
+# Caddyfile for AgentSandbox
+# Automatically handles HTTPS and reverse proxies to the Go backend.
+
+sandbox.example.com {
+    # Reverse proxy to the local AgentSandbox Gateway
+    reverse_proxy 127.0.0.1:8080
+
+    # Add security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+    }
+
+    # Enable compression for faster API responses
+    encode zstd gzip
+}

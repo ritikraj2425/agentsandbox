@@ -134,11 +134,15 @@ func (s *Session) Run(command string) (*protocol.Observation, error) {
 //	})
 //	obs, err := session.Execute(action)
 func (s *Session) Execute(action protocol.Action) (*protocol.Observation, error) {
-	cmd := action.Command()
-	if cmd == "" {
-		return nil, fmt.Errorf("action has no command")
+	obs, err := s.api.RunAction(s.ID, client.RunActionRequest{
+		Type:           action.Type,
+		Parameters:     action.Parameters,
+		ClientActionID: action.ID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to run action: %w", err)
 	}
-	return s.Run(cmd)
+	return obs, nil
 }
 
 // Destroy tears down the sandbox session and releases all resources.

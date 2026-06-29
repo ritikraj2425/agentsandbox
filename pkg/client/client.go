@@ -70,9 +70,7 @@ type CreateSessionResponse struct {
 }
 
 // RunActionRequest matches the gateway's POST /v1/sessions/{id}/actions payload.
-type RunActionRequest struct {
-	Command string `json:"command"`
-}
+type RunActionRequest = protocol.ActionExecutionRequest
 
 // APIError represents an error response from the API Gateway.
 type APIError struct {
