@@ -14,6 +14,13 @@ type ActionExecutionRequest struct {
 	Command        string                 `json:"command,omitempty"`
 }
 
+// WorkspaceInitRequest configures optional session workspace initialization.
+type WorkspaceInitRequest struct {
+	Type      string `json:"type,omitempty"`
+	GitURL    string `json:"git_url,omitempty"`
+	ArchiveID string `json:"archive_id,omitempty"`
+}
+
 // ActionRequestError describes why an action execution request is invalid.
 type ActionRequestError struct {
 	Code    string                 `json:"code"`

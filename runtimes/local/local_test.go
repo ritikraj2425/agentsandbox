@@ -52,6 +52,28 @@ func TestRuntime_EchoHello(t *testing.T) {
 	}
 }
 
+func TestRuntime_SessionWorkspacesAreIsolated(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+
+	rtA := New(dirA, nil)
+	rtB := New(dirB, nil)
+
+	writeAction := protocol.NewAction(protocol.ActionTypeShellRun, map[string]interface{}{
+		"command": "printf secret > only-a.txt",
+	})
+	if obs, err := rtA.Run(context.Background(), writeAction); err != nil || obs.Status != protocol.ObsStatusCompleted {
+		t.Fatalf("write in workspace A failed: status=%s err=%v", obs.Status, err)
+	}
+
+	readAction := protocol.NewAction(protocol.ActionTypeShellRun, map[string]interface{}{
+		"command": "test ! -e only-a.txt",
+	})
+	if obs, err := rtB.Run(context.Background(), readAction); err != nil || obs.Status != protocol.ObsStatusCompleted {
+		t.Fatalf("workspace B should not see workspace A file: status=%s err=%v stderr=%s", obs.Status, err, obs.StderrSummary)
+	}
+}
+
 func TestRuntime_InvalidCommand(t *testing.T) {
 	rt := New("/tmp", nil)
 	action := protocol.NewAction(protocol.ActionTypeShellRun, map[string]interface{}{

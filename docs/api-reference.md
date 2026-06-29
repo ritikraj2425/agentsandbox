@@ -22,13 +22,20 @@ Creates a new sandboxed environment.
 {
   "backend": "docker",
   "ttl": 3600,
-  "policy": "coding-safe"
+  "policy": "coding-safe",
+  "workspace": {
+    "type": "empty"
+  }
 }
 ```
 
 `policy` selects a bundled file from `policies/`, such as `coding-safe`,
 `no-network`, `browser-safe`, or `research`. Use `policy_file` to pass an
 explicit policy file path. If omitted, the gateway uses a default-deny policy.
+
+`workspace.type` can be `empty`, `git_clone`, or `uploaded_archive`. For
+`git_clone`, include `git_url`. Uploaded archive initialization is currently a
+placeholder and records the requested archive in session artifacts.
 
 ### Response
 ```json

@@ -205,12 +205,21 @@ type RunLogger struct {
 // It emits the initial "run.created" event. The caller is responsible for invoking Close()
 // to flush resources.
 func NewRunLogger(baseDir string) (*RunLogger, error) {
+	return newRunLogger(filepath.Join(baseDir, ".agentsandbox", "runs"))
+}
+
+// NewRunLoggerInDir creates a run logger directly under runRoot.
+func NewRunLoggerInDir(runRoot string) (*RunLogger, error) {
+	return newRunLogger(runRoot)
+}
+
+func newRunLogger(runRoot string) (*RunLogger, error) {
 	now := time.Now()
 	randomBytes := make([]byte, 4)
 	_, _ = rand.Read(randomBytes)
 	runID := fmt.Sprintf("run_%s_%x", now.Format("20060102_150405"), randomBytes)
 
-	runDir := filepath.Join(baseDir, ".agentsandbox", "runs", runID)
+	runDir := filepath.Join(runRoot, runID)
 
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create run directory %s: %w", runDir, err)

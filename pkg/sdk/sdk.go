@@ -68,6 +68,9 @@ type SessionConfig struct {
 
 	// PolicyFile selects a policy by file path.
 	PolicyFile string
+
+	// Workspace configures optional session workspace initialization.
+	Workspace protocol.WorkspaceInitRequest
 }
 
 // Session represents an active sandbox environment on the gateway.
@@ -107,6 +110,7 @@ func (c *Client) CreateSession(cfg SessionConfig) (*Session, error) {
 		TTL:        cfg.TTL,
 		Policy:     cfg.Policy,
 		PolicyFile: cfg.PolicyFile,
+		Workspace:  cfg.Workspace,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session: %w", err)

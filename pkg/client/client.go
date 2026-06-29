@@ -56,13 +56,14 @@ func New(baseURL string, token string) *Client {
 
 // CreateSessionRequest matches the gateway's POST /v1/sessions payload.
 type CreateSessionRequest struct {
-	Backend    string        `json:"backend"`
-	Image      string        `json:"image,omitempty"`
-	CPUs       string        `json:"cpus,omitempty"`
-	Memory     string        `json:"memory,omitempty"`
-	TTL        time.Duration `json:"ttl,omitempty"`
-	Policy     string        `json:"policy,omitempty"`
-	PolicyFile string        `json:"policy_file,omitempty"`
+	Backend    string                        `json:"backend"`
+	Image      string                        `json:"image,omitempty"`
+	CPUs       string                        `json:"cpus,omitempty"`
+	Memory     string                        `json:"memory,omitempty"`
+	TTL        time.Duration                 `json:"ttl,omitempty"`
+	Policy     string                        `json:"policy,omitempty"`
+	PolicyFile string                        `json:"policy_file,omitempty"`
+	Workspace  protocol.WorkspaceInitRequest `json:"workspace,omitempty"`
 }
 
 // CreateSessionResponse is returned by POST /v1/sessions.

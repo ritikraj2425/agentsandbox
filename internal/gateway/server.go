@@ -18,6 +18,7 @@ import (
 	"github.com/ritikraj2425/agentsandbox/internal/runtime"
 	"github.com/ritikraj2425/agentsandbox/internal/store"
 	"github.com/ritikraj2425/agentsandbox/internal/trace"
+	"github.com/ritikraj2425/agentsandbox/internal/workspace"
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
 	// Import backends to register them
 	browserrt "github.com/ritikraj2425/agentsandbox/runtimes/browser"
@@ -196,13 +197,14 @@ func (s *Server) handleDashboardSessionRoute(w http.ResponseWriter, r *http.Requ
 }
 
 type CreateSessionRequest struct {
-	Backend    string        `json:"backend"`
-	Image      string        `json:"image,omitempty"`
-	CPUs       string        `json:"cpus,omitempty"`
-	Memory     string        `json:"memory,omitempty"`
-	TTL        time.Duration `json:"ttl"`
-	Policy     string        `json:"policy,omitempty"`
-	PolicyFile string        `json:"policy_file,omitempty"`
+	Backend    string                        `json:"backend"`
+	Image      string                        `json:"image,omitempty"`
+	CPUs       string                        `json:"cpus,omitempty"`
+	Memory     string                        `json:"memory,omitempty"`
+	TTL        time.Duration                 `json:"ttl"`
+	Policy     string                        `json:"policy,omitempty"`
+	PolicyFile string                        `json:"policy_file,omitempty"`
+	Workspace  protocol.WorkspaceInitRequest `json:"workspace,omitempty"`
 }
 
 type CreateSessionResponse struct {
@@ -226,10 +228,17 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		req.TTL = 1 * time.Hour // default 1 hour
 	}
 
-	workDir, _ := os.Getwd()
+	ws, err := s.sessionManager.WorkspaceManager().Create(req.TTL, workspace.InitSpec(req.Workspace))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "workspace_create_failed", "Failed to create workspace", map[string]interface{}{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	workDir := ws.WorkspaceDir
 
 	var rt runtime.Runtime
-	var err error
 
 	switch req.Backend {
 	case "local":
@@ -244,7 +253,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		})
 	case "browser":
 		rt, err = browserrt.New(browserrt.Config{
-			WorkDir: workDir,
+			WorkDir:      workDir,
+			ArtifactsDir: ws.ArtifactsDir,
 		})
 	default:
 		// Attempt registry
@@ -269,7 +279,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.sessionManager.CreateSession(rt, req.TTL, actionPolicy)
+	sess, err := s.sessionManager.CreateSession(rt, req.TTL, actionPolicy, ws)
 	if err != nil {
 		if err == ErrMaxSessionsExceeded {
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
@@ -394,7 +404,7 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 		Timestamp: time.Now().UTC(),
 	})
 
-	decision := sess.Policy.EvaluateAction(action, s.workDir)
+	decision := sess.Policy.EvaluateAction(action, sess.WorkspaceDir)
 	if sess.Logger != nil {
 		sess.Logger.LogEvent(trace.EventTypePolicyCheck, "Policy evaluated", policyDecisionData(decision))
 	}

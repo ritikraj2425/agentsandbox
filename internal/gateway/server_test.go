@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ritikraj2425/agentsandbox/internal/policy"
+	"github.com/ritikraj2425/agentsandbox/internal/workspace"
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
 )
 
@@ -82,6 +83,14 @@ func TestServer_CreateSession(t *testing.T) {
 
 	if resp.SessionID == "" {
 		t.Error("Expected non-empty session ID")
+	}
+
+	sess, err := server.sessionManager.GetSession(resp.SessionID)
+	if err != nil {
+		t.Fatalf("expected created session to be stored: %v", err)
+	}
+	if sess.WorkspaceDir == "" || sess.ArtifactsDir == "" || sess.TracesDir == "" || sess.TmpDir == "" {
+		t.Fatalf("expected session workspace paths, got %#v", sess)
 	}
 }
 
@@ -352,7 +361,11 @@ func newActionTestServer(t *testing.T, runtimeName string, pol *policy.ActionPol
 
 	server := NewServer(8080, 10, "secret", t.TempDir(), "", nil)
 	rt := &recordingRuntime{name: runtimeName}
-	sess, err := server.sessionManager.CreateSession(rt, time.Minute, pol)
+	ws, err := server.sessionManager.WorkspaceManager().Create(time.Minute, workspace.InitSpec{})
+	if err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+	sess, err := server.sessionManager.CreateSession(rt, time.Minute, pol, ws)
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}

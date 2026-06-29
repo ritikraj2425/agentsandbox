@@ -30,11 +30,14 @@ package browser
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -72,6 +75,9 @@ type Config struct {
 
 	// Logger is the optional trace logger.
 	Logger *trace.RunLogger
+
+	// ArtifactsDir is where browser screenshots/downloads are persisted.
+	ArtifactsDir string
 }
 
 // Runtime manages a headless Chromium container and dispatches browser actions.
@@ -113,27 +119,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 	//
 	// Port 9222 is mapped to a random host port so multiple browser
 	// sessions can run concurrently without conflicts.
-	args := []string{
-		"run", "-d", "--rm",
-		"-p", fmt.Sprintf("0:%d", r.config.CDPPort),
-		"-p", "0:6080",
-		"--shm-size=256m",
-		r.config.Image,
-		"/bin/sh", "-c",
-		fmt.Sprintf(
-			"apt-get update && apt-get install -y --no-install-recommends x11vnc python3-websockify && rm -rf /var/lib/apt/lists/* && "+
-				"node -e \"const net = require('net'); net.createServer(s => { s.on('error', () => {}); const c = net.createConnection({port: %d, host: '127.0.0.1'}); c.on('error', () => s.destroy()); s.pipe(c).pipe(s); }).listen(%d, '0.0.0.0');\" & "+
-				"Xvfb :99 -screen 0 1280x720x24 & "+
-				"export DISPLAY=:99 && "+
-				"sleep 1 && "+
-				"x11vnc -display :99 -nopw -listen 0.0.0.0 -rfbport 5900 -shared -forever -q & "+
-				"websockify 6080 localhost:5900 --web /usr/share/novnc & "+
-				"/ms-playwright/chromium-*/chrome-linux/chrome --headless --no-sandbox --disable-gpu "+
-				"--remote-debugging-port=%d "+
-				"--disable-dev-shm-usage "+
-				"about:blank",
-			r.config.CDPPort+1, r.config.CDPPort, r.config.CDPPort+1),
-	}
+	args := r.dockerArgs()
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	var stdout, stderr bytes.Buffer
@@ -190,6 +176,40 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (r *Runtime) dockerArgs() []string {
+	args := []string{
+		"run", "-d", "--rm",
+		"-p", fmt.Sprintf("0:%d", r.config.CDPPort),
+		"-p", "0:6080",
+		"--shm-size=256m",
+	}
+	if r.config.WorkDir != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:/workspace", r.config.WorkDir))
+		args = append(args, "-w", "/workspace")
+	}
+	if r.config.ArtifactsDir != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:/artifacts", r.config.ArtifactsDir))
+	}
+	args = append(args,
+		r.config.Image,
+		"/bin/sh", "-c",
+		fmt.Sprintf(
+			"apt-get update && apt-get install -y --no-install-recommends x11vnc python3-websockify && rm -rf /var/lib/apt/lists/* && "+
+				"node -e \"const net = require('net'); net.createServer(s => { s.on('error', () => {}); const c = net.createConnection({port: %d, host: '127.0.0.1'}); c.on('error', () => s.destroy()); s.pipe(c).pipe(s); }).listen(%d, '0.0.0.0');\" & "+
+				"Xvfb :99 -screen 0 1280x720x24 & "+
+				"export DISPLAY=:99 && "+
+				"sleep 1 && "+
+				"x11vnc -display :99 -nopw -listen 0.0.0.0 -rfbport 5900 -shared -forever -q & "+
+				"websockify 6080 localhost:5900 --web /usr/share/novnc & "+
+				"/ms-playwright/chromium-*/chrome-linux/chrome --headless --no-sandbox --disable-gpu "+
+				"--remote-debugging-port=%d "+
+				"--disable-dev-shm-usage "+
+				"about:blank",
+			r.config.CDPPort+1, r.config.CDPPort, r.config.CDPPort+1),
+	)
+	return args
 }
 
 // Stop tears down the browser container and disconnects the CDP client.
@@ -319,6 +339,14 @@ func (r *Runtime) handleScreenshot(obs *protocol.Observation) error {
 	}
 	obs.Screenshot = base64Data
 	obs.StdoutSummary = fmt.Sprintf("[screenshot captured: %d bytes base64]", len(base64Data))
+	if r.config.ArtifactsDir != "" {
+		if err := os.MkdirAll(r.config.ArtifactsDir, 0755); err == nil {
+			path := filepath.Join(r.config.ArtifactsDir, fmt.Sprintf("screenshot_%s.png", time.Now().Format("20060102_150405_000000000")))
+			if png, err := base64.StdEncoding.DecodeString(base64Data); err == nil {
+				_ = os.WriteFile(path, png, 0644)
+			}
+		}
+	}
 	return nil
 }
 
@@ -389,7 +417,7 @@ func (r *Runtime) waitForCDP(ctx context.Context, timeout time.Duration) (string
 		}
 
 		var targets []struct {
-			Type               string `json:"type"`
+			Type                 string `json:"type"`
 			WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 		}
 

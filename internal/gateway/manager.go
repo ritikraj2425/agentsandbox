@@ -4,12 +4,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/ritikraj2425/agentsandbox/internal/policy"
 	"github.com/ritikraj2425/agentsandbox/internal/runtime"
 	"github.com/ritikraj2425/agentsandbox/internal/trace"
+	"github.com/ritikraj2425/agentsandbox/internal/workspace"
 )
 
 var (
@@ -19,12 +21,17 @@ var (
 
 // Session represents a virtual, multi-tenant sandbox environment.
 type Session struct {
-	ID        string
-	Runtime   runtime.Runtime
-	Policy    *policy.ActionPolicy
-	Logger    *trace.RunLogger
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	ID           string
+	Runtime      runtime.Runtime
+	Policy       *policy.ActionPolicy
+	Logger       *trace.RunLogger
+	Workspace    *workspace.Paths
+	WorkspaceDir string
+	ArtifactsDir string
+	TracesDir    string
+	TmpDir       string
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
 }
 
 // SessionManager tracks active sessions and enforces resource quotas.
@@ -33,20 +40,30 @@ type SessionManager struct {
 	sessions    map[string]*Session
 	maxSessions int
 	workDir     string
+	workspaces  *workspace.Manager
 }
 
 // NewSessionManager creates a new manager with the specified concurrent limit.
 func NewSessionManager(maxSessions int, workDir string) *SessionManager {
+	manager, _ := workspace.NewManager(workspace.Config{
+		BaseDir:   filepath.Join(workDir, ".agentsandbox", "sessions"),
+		Retention: 24 * time.Hour,
+	})
 	return &SessionManager{
 		sessions:    make(map[string]*Session),
 		maxSessions: maxSessions,
 		workDir:     workDir,
+		workspaces:  manager,
 	}
+}
+
+func (sm *SessionManager) WorkspaceManager() *workspace.Manager {
+	return sm.workspaces
 }
 
 // CreateSession registers a new sandbox session if quotas allow.
 // The caller is responsible for constructing the actual runtime backend.
-func (sm *SessionManager) CreateSession(rt runtime.Runtime, ttl time.Duration, pol *policy.ActionPolicy) (*Session, error) {
+func (sm *SessionManager) CreateSession(rt runtime.Runtime, ttl time.Duration, pol *policy.ActionPolicy, ws *workspace.Paths) (*Session, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -56,9 +73,18 @@ func (sm *SessionManager) CreateSession(rt runtime.Runtime, ttl time.Duration, p
 	}
 
 	id := generateSessionID()
+	if ws != nil {
+		id = ws.SessionID
+	}
 	now := time.Now()
 
-	logger, err := trace.NewRunLogger(sm.workDir)
+	var logger *trace.RunLogger
+	var err error
+	if ws != nil {
+		logger, err = trace.NewRunLoggerInDir(ws.TracesDir)
+	} else {
+		logger, err = trace.NewRunLogger(sm.workDir)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -68,8 +94,16 @@ func (sm *SessionManager) CreateSession(rt runtime.Runtime, ttl time.Duration, p
 		Runtime:   rt,
 		Policy:    pol,
 		Logger:    logger,
+		Workspace: ws,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),
+	}
+	if ws != nil {
+		sess.WorkspaceDir = ws.WorkspaceDir
+		sess.ArtifactsDir = ws.ArtifactsDir
+		sess.TracesDir = ws.TracesDir
+		sess.TmpDir = ws.TmpDir
+		sess.ExpiresAt = ws.ExpiresAt
 	}
 
 	sm.sessions[id] = sess
@@ -117,6 +151,9 @@ func (sm *SessionManager) CleanupLoop(interval time.Duration) {
 				}
 				delete(sm.sessions, id)
 			}
+		}
+		if sm.workspaces != nil {
+			_ = sm.workspaces.CleanupExpired(now)
 		}
 		sm.mu.Unlock()
 	}

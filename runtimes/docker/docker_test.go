@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
@@ -14,6 +15,27 @@ import (
 func dockerAvailable() bool {
 	cmd := exec.Command("docker", "info")
 	return cmd.Run() == nil
+}
+
+func TestRuntimeDockerArgsMountSessionWorkspaceOnly(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "session", "workspace")
+	rt := &Runtime{workDir: workspace, image: "alpine:latest"}
+
+	args := rt.dockerArgs("pwd")
+
+	foundMount := false
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "-v" {
+			foundMount = true
+			expected := workspace + ":/workspace"
+			if args[i+1] != expected {
+				t.Fatalf("expected mount %s, got %s", expected, args[i+1])
+			}
+		}
+	}
+	if !foundMount {
+		t.Fatal("expected docker args to include workspace mount")
+	}
 }
 
 func TestRuntime_Name(t *testing.T) {

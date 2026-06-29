@@ -130,14 +130,7 @@ func (r *Runtime) Run(ctx context.Context, action protocol.Action) (protocol.Obs
 	//   -v             Bind-mount the host workspace into the container.
 	//   -w /workspace  Set the working directory inside the container.
 	//   /bin/sh -c     Execute the command through a shell for pipe/glob support.
-	dockerArgs := []string{
-		"run",
-		"--rm",
-		"-v", fmt.Sprintf("%s:/workspace", r.workDir),
-		"-w", "/workspace",
-		r.image,
-		"/bin/sh", "-c", obs.Command,
-	}
+	dockerArgs := r.dockerArgs(obs.Command)
 
 	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
 
@@ -210,4 +203,15 @@ func (r *Runtime) Run(ctx context.Context, action protocol.Action) (protocol.Obs
 	}
 
 	return obs, nil
+}
+
+func (r *Runtime) dockerArgs(command string) []string {
+	return []string{
+		"run",
+		"--rm",
+		"-v", fmt.Sprintf("%s:/workspace", r.workDir),
+		"-w", "/workspace",
+		r.image,
+		"/bin/sh", "-c", command,
+	}
 }

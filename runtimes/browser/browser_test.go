@@ -3,10 +3,39 @@ package browser
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
 )
+
+func TestBrowserDockerArgsMountWorkspaceAndArtifacts(t *testing.T) {
+	root := t.TempDir()
+	workDir := filepath.Join(root, "workspace")
+	artifactsDir := filepath.Join(root, "artifacts")
+	rt := &Runtime{config: Config{
+		WorkDir:      workDir,
+		ArtifactsDir: artifactsDir,
+		Image:        "browser-image",
+		CDPPort:      DefaultCDPPort,
+	}}
+
+	args := rt.dockerArgs()
+
+	assertArgPair(t, args, "-v", workDir+":/workspace")
+	assertArgPair(t, args, "-v", artifactsDir+":/artifacts")
+	assertArgPair(t, args, "-w", "/workspace")
+}
+
+func assertArgPair(t *testing.T, args []string, key string, value string) {
+	t.Helper()
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == key && args[i+1] == value {
+			return
+		}
+	}
+	t.Fatalf("expected args to contain %s %s, got %#v", key, value, args)
+}
 
 func TestBrowserRuntime(t *testing.T) {
 	if err := exec.Command("docker", "info").Run(); err != nil {
@@ -82,7 +111,7 @@ func TestBrowserRuntime(t *testing.T) {
 	if rt.cdpClient != nil {
 		t.Error("Expected CDP client to be nil after stop")
 	}
-	
+
 	// Verify container is gone
 	err = exec.Command("docker", "inspect", rt.containerID).Run()
 	if err == nil {
