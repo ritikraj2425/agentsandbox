@@ -20,10 +20,15 @@ Creates a new sandboxed environment.
 ### Request Body
 ```json
 {
-  "backend": "docker", 
-  "ttl": 3600
+  "backend": "docker",
+  "ttl": 3600,
+  "policy": "coding-safe"
 }
 ```
+
+`policy` selects a bundled file from `policies/`, such as `coding-safe`,
+`no-network`, `browser-safe`, or `research`. Use `policy_file` to pass an
+explicit policy file path. If omitted, the gateway uses a default-deny policy.
 
 ### Response
 ```json
@@ -84,7 +89,14 @@ The legacy `command` field is still supported:
   "exit_code": 0,
   "stdout_summary": "PRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"",
   "stderr_summary": "",
-  "duration_ms": 45
+  "duration_ms": 45,
+  "policy_decision": {
+    "allowed": true,
+    "effect": "allow",
+    "policy_name": "coding-safe",
+    "matched_rule": "shell.run",
+    "reason": "allowed by policy"
+  }
 }
 ```
 

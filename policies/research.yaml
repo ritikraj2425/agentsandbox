@@ -1,14 +1,28 @@
 # AgentSandbox Policy: Research
 #
-# This policy allows all actions. Suitable for trusted research agents
-# operating in controlled environments.
+# Broad policy for trusted research sandboxes. Deny still wins over allow.
 
 name: research
-version: "1"
-description: >
-  A fully permissive policy that allows all actions. Use only in
-  trusted environments with trusted agents.
+description: Broad action policy for trusted, controlled research sessions.
+default_effect: deny
+max_action_duration_ms: 300000
 
-default_effect: allow
+action_types:
+  allow:
+    - "*"
 
-rules: []
+shell:
+  deny_prefixes:
+    - sudo
+    - rm -rf /
+
+file:
+  allow_paths:
+    - .
+  deny_paths:
+    - .git
+    - .env
+
+browser:
+  deny_domains:
+    - 169.254.169.254

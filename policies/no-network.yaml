@@ -1,29 +1,44 @@
 # AgentSandbox Policy: No Network
-#
-# This policy allows filesystem and shell operations
-# while denying all network access. Suitable for offline coding tasks.
 
 name: no-network
-version: "1"
-description: >
-  A policy that allows shell and filesystem operations but blocks
-  all network requests. Suitable for offline coding tasks.
-
+description: Allows local shell and workspace file actions, denies browser/network actions.
 default_effect: deny
+max_action_duration_ms: 120000
 
-rules:
-  - action: shell
-    effect: allow
-    description: "Allow shell command execution"
+action_types:
+  allow:
+    - shell.run
+    - file.read
+    - file.write
+    - file.patch
+    - task.done
+  deny:
+    - browser.goto
+    - browser.evaluate
 
-  - action: file_read
-    effect: allow
-    description: "Allow reading any file"
+shell:
+  allow_prefixes:
+    - go
+    - gofmt
+    - git
+    - ls
+    - cat
+    - pwd
+    - echo
+  deny_prefixes:
+    - curl
+    - wget
+    - ssh
+    - sudo
+    - rm -rf
 
-  - action: file_write
-    effect: allow
-    description: "Allow writing files"
+file:
+  allow_paths:
+    - .
+  deny_paths:
+    - .git
+    - .env
 
-  - action: network
-    effect: deny
-    description: "Block all network requests"
+browser:
+  deny_domains:
+    - "*"

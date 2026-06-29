@@ -62,6 +62,12 @@ type SessionConfig struct {
 	// TTL is how long the session stays alive before automatic cleanup.
 	// Defaults to 1 hour if zero.
 	TTL time.Duration
+
+	// Policy selects a bundled policy by name (for example "coding-safe").
+	Policy string
+
+	// PolicyFile selects a policy by file path.
+	PolicyFile string
 }
 
 // Session represents an active sandbox environment on the gateway.
@@ -94,11 +100,13 @@ func (c *Client) CreateSession(cfg SessionConfig) (*Session, error) {
 	}
 
 	resp, err := c.api.CreateSession(client.CreateSessionRequest{
-		Backend: cfg.Backend,
-		Image:   cfg.Image,
-		CPUs:    cfg.CPULimit,
-		Memory:  cfg.MemoryLimit,
-		TTL:     cfg.TTL,
+		Backend:    cfg.Backend,
+		Image:      cfg.Image,
+		CPUs:       cfg.CPULimit,
+		Memory:     cfg.MemoryLimit,
+		TTL:        cfg.TTL,
+		Policy:     cfg.Policy,
+		PolicyFile: cfg.PolicyFile,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session: %w", err)

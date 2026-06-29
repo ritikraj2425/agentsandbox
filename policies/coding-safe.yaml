@@ -1,29 +1,52 @@
-# AgentSandbox Example Policy: Coding Safe
+# AgentSandbox Policy: Coding Safe
 #
-# This policy allows common coding actions (file read/write, shell commands)
-# while denying network access. Suitable for local coding agents.
+# Allows common local coding actions while keeping network-oriented browser
+# navigation off by default.
 
 name: coding-safe
-version: "1"
-description: >
-  A permissive policy for coding agents that allows filesystem operations
-  and shell commands but blocks network requests.
-
+description: Local coding policy with shell and workspace file access.
 default_effect: deny
+max_action_duration_ms: 120000
 
-rules:
-  - action: file_read
-    effect: allow
-    description: "Allow reading any file"
+action_types:
+  allow:
+    - shell.run
+    - file.read
+    - file.write
+    - file.patch
+    - task.done
+  deny:
+    - browser.goto
 
-  - action: file_write
-    effect: allow
-    description: "Allow writing files"
+shell:
+  allow_prefixes:
+    - go
+    - gofmt
+    - git
+    - ls
+    - cat
+    - pwd
+    - echo
+    - mkdir
+    - touch
+  deny_prefixes:
+    - rm -rf
+    - sudo
+    - chmod 777
 
-  - action: shell
-    effect: allow
-    description: "Allow shell command execution"
+file:
+  allow_paths:
+    - .
+  deny_paths:
+    - .git
+    - .env
+    - agentsandbox.db
 
-  - action: network
-    effect: deny
-    description: "Block all network requests"
+browser:
+  deny_domains:
+    - "*"
+
+approval_required:
+  shell_prefixes:
+    - npm install
+    - go get

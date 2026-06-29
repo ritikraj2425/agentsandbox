@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ritikraj2425/agentsandbox/internal/policy"
 	"github.com/ritikraj2425/agentsandbox/internal/runtime"
 	"github.com/ritikraj2425/agentsandbox/internal/trace"
 )
@@ -20,6 +21,7 @@ var (
 type Session struct {
 	ID        string
 	Runtime   runtime.Runtime
+	Policy    *policy.ActionPolicy
 	Logger    *trace.RunLogger
 	CreatedAt time.Time
 	ExpiresAt time.Time
@@ -44,7 +46,7 @@ func NewSessionManager(maxSessions int, workDir string) *SessionManager {
 
 // CreateSession registers a new sandbox session if quotas allow.
 // The caller is responsible for constructing the actual runtime backend.
-func (sm *SessionManager) CreateSession(rt runtime.Runtime, ttl time.Duration) (*Session, error) {
+func (sm *SessionManager) CreateSession(rt runtime.Runtime, ttl time.Duration, pol *policy.ActionPolicy) (*Session, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -64,6 +66,7 @@ func (sm *SessionManager) CreateSession(rt runtime.Runtime, ttl time.Duration) (
 	sess := &Session{
 		ID:        id,
 		Runtime:   rt,
+		Policy:    pol,
 		Logger:    logger,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),

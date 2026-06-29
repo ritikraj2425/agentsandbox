@@ -7,12 +7,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
 
 	"github.com/ritikraj2425/agentsandbox/internal/observe"
+	"github.com/ritikraj2425/agentsandbox/internal/policy"
 	"github.com/ritikraj2425/agentsandbox/internal/runtime"
 	"github.com/ritikraj2425/agentsandbox/internal/store"
 	"github.com/ritikraj2425/agentsandbox/internal/trace"
@@ -194,11 +196,13 @@ func (s *Server) handleDashboardSessionRoute(w http.ResponseWriter, r *http.Requ
 }
 
 type CreateSessionRequest struct {
-	Backend string        `json:"backend"`
-	Image   string        `json:"image,omitempty"`
-	CPUs    string        `json:"cpus,omitempty"`
-	Memory  string        `json:"memory,omitempty"`
-	TTL     time.Duration `json:"ttl"`
+	Backend    string        `json:"backend"`
+	Image      string        `json:"image,omitempty"`
+	CPUs       string        `json:"cpus,omitempty"`
+	Memory     string        `json:"memory,omitempty"`
+	TTL        time.Duration `json:"ttl"`
+	Policy     string        `json:"policy,omitempty"`
+	PolicyFile string        `json:"policy_file,omitempty"`
 }
 
 type CreateSessionResponse struct {
@@ -257,7 +261,15 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.sessionManager.CreateSession(rt, req.TTL)
+	actionPolicy, err := s.loadSessionPolicy(req)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_policy", "Failed to load policy", map[string]interface{}{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	sess, err := s.sessionManager.CreateSession(rt, req.TTL, actionPolicy)
 	if err != nil {
 		if err == ErrMaxSessionsExceeded {
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
@@ -289,6 +301,26 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) loadSessionPolicy(req CreateSessionRequest) (*policy.ActionPolicy, error) {
+	policyPath := strings.TrimSpace(req.PolicyFile)
+	if policyPath == "" && strings.TrimSpace(req.Policy) != "" {
+		policyPath = strings.TrimSpace(req.Policy)
+	}
+	if policyPath == "" {
+		return policy.NewDefaultDenyActionPolicy(), nil
+	}
+	if !strings.Contains(policyPath, string(os.PathSeparator)) && !strings.HasSuffix(policyPath, ".yaml") {
+		policyPath = policyPath + ".yaml"
+	}
+	if !filepath.IsAbs(policyPath) {
+		if !strings.HasPrefix(policyPath, "policies/") {
+			policyPath = filepath.Join("policies", policyPath)
+		}
+		policyPath = filepath.Join(s.workDir, policyPath)
+	}
+	return policy.LoadActionPolicyFromFile(policyPath)
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, sessionID string) {
@@ -348,7 +380,6 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 			"type":      string(action.Type),
 			"command":   req.Command,
 		})
-		sess.Logger.LogEvent(trace.EventTypeProcessStarted, "Executing action", nil)
 	}
 
 	// Publish action received
@@ -363,8 +394,44 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request, session
 		Timestamp: time.Now().UTC(),
 	})
 
+	decision := sess.Policy.EvaluateAction(action, s.workDir)
+	if sess.Logger != nil {
+		sess.Logger.LogEvent(trace.EventTypePolicyCheck, "Policy evaluated", policyDecisionData(decision))
+	}
+
+	if !decision.Allowed {
+		obs := protocol.NewObservation(action.ID)
+		obs.Backend = sess.Runtime.Name()
+		obs.PolicyDecision = &decision
+		obs.Error = decision.Reason
+		obs.Command = action.Command()
+		if decision.Effect == policy.EffectRequireApproval {
+			obs.Status = protocol.ObsStatusWaitingForApproval
+			if sess.Logger != nil {
+				sess.Logger.LogEvent(trace.EventTypeApprovalRequested, "Action waiting for approval", policyDecisionData(decision))
+			}
+		} else {
+			obs.Status = protocol.ObsStatusDenied
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(obs)
+		return
+	}
+
+	if sess.Logger != nil {
+		sess.Logger.LogEvent(trace.EventTypeProcessStarted, "Executing action", nil)
+	}
+
+	runCtx := context.Background()
+	var cancel context.CancelFunc
+	if sess.Policy != nil && sess.Policy.MaxActionDuration > 0 {
+		runCtx, cancel = context.WithTimeout(runCtx, sess.Policy.MaxActionDuration)
+		defer cancel()
+	}
+
 	// Execute via runtime
-	obs, err := sess.Runtime.Run(context.Background(), action)
+	obs, err := sess.Runtime.Run(runCtx, action)
+	obs.PolicyDecision = &decision
 	if err != nil {
 		if sess.Logger != nil {
 			sess.Logger.LogEvent(trace.EventTypeError, "Execution failed", map[string]interface{}{
@@ -414,4 +481,20 @@ func writeJSONError(w http.ResponseWriter, status int, code string, message stri
 			Details: details,
 		},
 	})
+}
+
+func policyDecisionData(decision protocol.PolicyDecision) map[string]interface{} {
+	data := map[string]interface{}{
+		"allowed":     decision.Allowed,
+		"effect":      decision.Effect,
+		"policy_name": decision.PolicyName,
+		"reason":      decision.Reason,
+	}
+	if decision.MatchedRule != "" {
+		data["matched_rule"] = decision.MatchedRule
+	}
+	if decision.Details != nil {
+		data["details"] = decision.Details
+	}
+	return data
 }

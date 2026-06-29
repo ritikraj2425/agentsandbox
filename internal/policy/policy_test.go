@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ritikraj2425/agentsandbox/internal/actions"
+	"github.com/ritikraj2425/agentsandbox/pkg/protocol"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -308,6 +309,182 @@ commands:
 	// wget should be default denied.
 	if d := pol.CheckCommand("wget example.com"); d.Allowed {
 		t.Error("'wget' should be default denied")
+	}
+}
+
+func TestActionPolicy_AllowShellCommand(t *testing.T) {
+	pol := &ActionPolicy{
+		Name:               "structured",
+		AllowedActionTypes: []protocol.ActionType{protocol.ActionTypeShellRun},
+		Shell: ShellRules{
+			AllowPrefixes: []string{"go test"},
+		},
+	}
+	action := protocol.NewAction(protocol.ActionTypeShellRun, map[string]interface{}{"command": "go test ./..."})
+
+	decision := pol.EvaluateAction(action, t.TempDir())
+
+	if !decision.Allowed {
+		t.Fatalf("expected allowed, got %s", decision.Reason)
+	}
+	if decision.Effect != string(EffectAllow) {
+		t.Fatalf("expected allow, got %s", decision.Effect)
+	}
+}
+
+func TestActionPolicy_DenyWinsOverAllow(t *testing.T) {
+	pol := &ActionPolicy{
+		Name:               "structured",
+		AllowedActionTypes: []protocol.ActionType{protocol.ActionTypeShellRun},
+		Shell: ShellRules{
+			AllowPrefixes: []string{"rm"},
+			DenyPrefixes:  []string{"rm -rf"},
+		},
+	}
+	action := protocol.NewAction(protocol.ActionTypeShellRun, map[string]interface{}{"command": "rm -rf tmp"})
+
+	decision := pol.EvaluateAction(action, t.TempDir())
+
+	if decision.Allowed {
+		t.Fatal("expected denied")
+	}
+	if decision.Effect != string(EffectDeny) {
+		t.Fatalf("expected deny, got %s", decision.Effect)
+	}
+}
+
+func TestActionPolicy_DefaultDeny(t *testing.T) {
+	action := protocol.NewAction(protocol.ActionTypeShellRun, map[string]interface{}{"command": "echo hello"})
+
+	decision := NewDefaultDenyActionPolicy().EvaluateAction(action, t.TempDir())
+
+	if decision.Allowed {
+		t.Fatal("expected default deny")
+	}
+	if decision.Effect != EffectDefaultDeny {
+		t.Fatalf("expected default deny, got %s", decision.Effect)
+	}
+}
+
+func TestActionPolicy_ApprovalRequired(t *testing.T) {
+	pol := &ActionPolicy{
+		Name:               "approval",
+		AllowedActionTypes: []protocol.ActionType{protocol.ActionTypeShellRun},
+		ApprovalRequired: ApprovalRules{
+			ShellPrefixes: []string{"npm install"},
+		},
+	}
+	action := protocol.NewAction(protocol.ActionTypeShellRun, map[string]interface{}{"command": "npm install express"})
+
+	decision := pol.EvaluateAction(action, t.TempDir())
+
+	if decision.Allowed {
+		t.Fatal("approval-required action should not be allowed")
+	}
+	if decision.Effect != EffectRequireApproval {
+		t.Fatalf("expected require approval, got %s", decision.Effect)
+	}
+}
+
+func TestActionPolicy_MaxActionDuration(t *testing.T) {
+	pol := &ActionPolicy{
+		Name:               "duration",
+		AllowedActionTypes: []protocol.ActionType{protocol.ActionTypeBrowserWaitFor},
+		MaxActionDuration:  1000,
+	}
+	action := protocol.NewAction(protocol.ActionTypeBrowserWaitFor, map[string]interface{}{"timeout_ms": 2000})
+
+	decision := pol.EvaluateAction(action, t.TempDir())
+
+	if decision.Allowed {
+		t.Fatal("expected duration denial")
+	}
+	if decision.MatchedRule != "max_action_duration_ms" {
+		t.Fatalf("expected max duration rule, got %s", decision.MatchedRule)
+	}
+}
+
+func TestActionPolicy_DeniesBrowserDomainUsingParsedURL(t *testing.T) {
+	pol := &ActionPolicy{
+		Name:               "browser",
+		AllowedActionTypes: []protocol.ActionType{protocol.ActionTypeBrowserGoto},
+		Browser: BrowserRules{
+			AllowDomains: []string{"example.com"},
+			DenyDomains:  []string{"blocked.example.com"},
+		},
+	}
+	action := protocol.NewAction(protocol.ActionTypeBrowserGoto, map[string]interface{}{
+		"url": "https://blocked.example.com:443/path",
+	})
+
+	decision := pol.EvaluateAction(action, t.TempDir())
+
+	if decision.Allowed {
+		t.Fatal("expected denied browser domain")
+	}
+	if decision.MatchedRule != "blocked.example.com" {
+		t.Fatalf("expected blocked.example.com match, got %s", decision.MatchedRule)
+	}
+}
+
+func TestActionPolicy_DeniesFileWorkspaceEscape(t *testing.T) {
+	pol := &ActionPolicy{
+		Name:               "files",
+		AllowedActionTypes: []protocol.ActionType{protocol.ActionTypeFileRead},
+		File: FileRules{
+			AllowPaths: []string{"."},
+		},
+	}
+	action := protocol.NewAction(protocol.ActionTypeFileRead, map[string]interface{}{
+		"path": "../secret.txt",
+	})
+
+	decision := pol.EvaluateAction(action, t.TempDir())
+
+	if decision.Allowed {
+		t.Fatal("expected escaped path denied")
+	}
+	if decision.MatchedRule != "workspace_escape" {
+		t.Fatalf("expected workspace_escape, got %s", decision.MatchedRule)
+	}
+}
+
+func TestLoadActionPolicyFromFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	policyPath := filepath.Join(tmpDir, "structured.yaml")
+	content := `name: structured
+default_effect: deny
+max_action_duration_ms: 5000
+action_types:
+  allow:
+    - shell.run
+  deny:
+    - browser.goto
+shell:
+  allow_prefixes:
+    - go test
+  deny_prefixes:
+    - rm -rf
+approval_required:
+  shell_prefixes:
+    - npm install
+`
+	if err := os.WriteFile(policyPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+
+	pol, err := LoadActionPolicyFromFile(policyPath)
+	if err != nil {
+		t.Fatalf("load policy: %v", err)
+	}
+	if pol.Name != "structured" {
+		t.Fatalf("expected name structured, got %s", pol.Name)
+	}
+	if len(pol.AllowedActionTypes) != 1 || pol.AllowedActionTypes[0] != protocol.ActionTypeShellRun {
+		t.Fatalf("unexpected allowed action types: %#v", pol.AllowedActionTypes)
+	}
+	if pol.MaxActionDuration.Milliseconds() != 5000 {
+		t.Fatalf("expected max duration 5000ms, got %d", pol.MaxActionDuration.Milliseconds())
 	}
 }
 

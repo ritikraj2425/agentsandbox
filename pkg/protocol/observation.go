@@ -28,7 +28,22 @@ const (
 	// ObsStatusApprovalRequired means the action needs human approval.
 	// The agent should wait or try something else.
 	ObsStatusApprovalRequired ObservationStatus = "approval_required"
+
+	// ObsStatusWaitingForApproval means the action is paused until a human
+	// approves it. Kept separate from the older approval_required value for API
+	// responses that need to distinguish a queued approval state.
+	ObsStatusWaitingForApproval ObservationStatus = "waiting_for_approval"
 )
+
+// PolicyDecision describes the policy verdict attached to every observation.
+type PolicyDecision struct {
+	Allowed     bool                   `json:"allowed"`
+	Effect      string                 `json:"effect"`
+	PolicyName  string                 `json:"policy_name,omitempty"`
+	MatchedRule string                 `json:"matched_rule,omitempty"`
+	Reason      string                 `json:"reason"`
+	Details     map[string]interface{} `json:"details,omitempty"`
+}
 
 // Observation is the structured result returned after an Action is processed.
 //
@@ -99,6 +114,9 @@ type Observation struct {
 
 	// PageURL is the current browser URL after a browser action.
 	PageURL string `json:"page_url,omitempty"`
+
+	// PolicyDecision records the gateway policy result for this action.
+	PolicyDecision *PolicyDecision `json:"policy_decision,omitempty"`
 
 	// CreatedAt is when this observation was generated.
 	CreatedAt time.Time `json:"created_at"`
